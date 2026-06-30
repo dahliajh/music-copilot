@@ -2,12 +2,20 @@
 
 Fixtures live in backend/tests/fixtures/. `sample_bass_excerpt.musicxml` is
 the same 10-note excerpt the frontend uses for its OSMD spike (copied here
-so backend tests don't depend on the frontend's asset layout); the rest are
-small synthetic files built to exercise one edge case each.
+so backend tests don't depend on the frontend's asset layout); most of the
+rest are small synthetic files built to exercise one edge case each.
 
-These are synthetic/hand-built fixtures, not real double-bass method-book
-excerpts — per the MVP plan, Phase 1 should also be validated against a
-handful of real excerpts once available (see STATUS.md).
+`bach_bwv140_7_bass_voice.musicxml` is the one *real* fixture: the bass
+voice of J.S. Bach's chorale "Wachet auf, ruft uns die Stimme" (BWV 140,
+No. 7), extracted from music21's bundled public-domain chorale corpus and
+exported fresh via music21 - real engraving, not hand-typed by us. It's a
+chorale bass *vocal* line rather than a part written for double bass, but
+it's genuinely monophonic, bass-clef, public domain, and exercises real
+ties/accidentals - and it's how a real round-trip bug got caught (see
+test_real_world_title_extraction_fallback below). Real double-bass
+method-book excerpts from actual school sheet music are still the better
+long-term validation per the MVP plan (see STATUS.md) - this fixture is a
+stand-in, not a replacement for that.
 """
 
 from __future__ import annotations
@@ -135,3 +143,28 @@ def test_score_id_is_derived_and_stable_when_not_given(ingester: MusicXMLIngeste
     second = ingester.ingest(raw, ScoreSourceFormat.MUSICXML)
     assert first.score.score_id == second.score.score_id
     assert first.score.score_id  # non-empty
+
+
+def test_real_world_bach_chorale_bass_voice(ingester: MusicXMLIngester) -> None:
+    """First real (non-hand-built) fixture: a genuine Bach chorale bass line.
+
+    Doubles as a regression test for a real bug this fixture caught: the
+    file only sets <movement-title>, not <work-title>, and `_extract_title`
+    originally only checked the latter (via music21's `.title`), silently
+    returning None. Fixed with `.bestTitle`.
+    """
+    result = ingester.ingest(
+        _read("bach_bwv140_7_bass_voice.musicxml"), ScoreSourceFormat.MUSICXML
+    )
+    score = result.score
+
+    assert score.title == "Wachet auf, ruft uns die Stimme — Bass voice (BWV 140, No. 7)"
+    assert len(score.notes) == 82
+    assert any(n.tied_from_prev for n in score.notes)  # real chorale ties across the bar
+    # Sanity check we're not accidentally picking up a different voice: an
+    # SATB bass line's range, including the occasional voice-crossing note
+    # above middle C, not the soprano/alto/tenor ranges above it.
+    assert min(n.midi for n in score.notes) < 48  # dips below C3
+    assert max(n.midi for n in score.notes) < 67  # stays well under soprano range
+    assert any(w.code == "missing_tempo" for w in result.warnings)  # chorale exports have none
+    assert not any(w.code in ("chord_in_monophonic_part", "multiple_voices") for w in result.warnings)

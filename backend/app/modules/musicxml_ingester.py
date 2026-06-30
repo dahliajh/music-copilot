@@ -231,9 +231,15 @@ def _extract_notes(part) -> tuple[list[ScoreNote], list[ScoreIngestError]]:
 
 def _extract_title(parsed) -> Optional[str]:
     md = parsed.metadata
-    if md and md.title:
-        return md.title
-    return None
+    if not md:
+        return None
+    # `.title` only reflects MusicXML's <work-title>. Real-world files
+    # (e.g. ones exported from notation software, not hand-typeset) commonly
+    # set only <movement-title> instead - found via a real Bach chorale
+    # export that has a movement-title but no separate work-title, which
+    # `.title` alone silently returned None for. `.bestTitle` falls back
+    # through title -> movementName -> alternativeTitle correctly.
+    return md.bestTitle
 
 
 def _derive_score_id(parsed, raw: bytes) -> str:
