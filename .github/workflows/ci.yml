@@ -27,7 +27,6 @@ jobs:
       - name: Run tests
         run: |
           if find backend -type f -name "test_*.py" -o -name "*_test.py" | grep -q .; then
-            pip install pytest
             pytest backend
           else
             echo "No backend tests yet — skipping pytest run."

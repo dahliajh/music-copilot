@@ -7,7 +7,11 @@ uvicorn[standard]>=0.29
 pydantic>=2.6
 python-multipart>=0.0.9   # multipart/form-data for audio + score uploads
 
-# --- Score ingest / manipulation (pick one as primary; both listed) ---
+# --- Score ingest / manipulation ---
+# Decided for Phase 1: music21 is the primary/only parser MusicXMLIngester
+# uses (backend/app/modules/musicxml_ingester.py) - mature MusicXML support,
+# well documented. partitura is kept around for the evaluation the plan
+# suggested, not used in any code path yet.
 music21>=9.1              # MusicXML parsing, canonical score representation
 partitura>=1.4            # alternative score model; keep for evaluation
 
@@ -19,3 +23,7 @@ numpy>=1.26
 
 # --- Alignment ---
 dtw-python>=1.4           # offline DTW (v1); subsequence/partial alignment
+
+# --- Dev / test ---
+pytest>=8.0
+httpx>=0.27                # required by fastapi.testclient.TestClient

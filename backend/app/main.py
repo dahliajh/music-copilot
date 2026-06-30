@@ -1,8 +1,10 @@
 """Music Copilot backend - FastAPI skeleton.
 
-This wires the four module contracts together with MOCK implementations to
-prove the interfaces compose end-to-end. No real OMR, pitch detection, or DTW
-is implemented here - every response is clearly marked as placeholder/mock.
+This wires the four module contracts together. As of Phase 1, score-ingest
+(`/score/import`) is a real implementation (MusicXMLIngester); transcription,
+alignment, and assessment are still MOCK implementations, since Phases 2-3
+haven't landed yet. No real pitch detection or DTW is implemented yet -
+`/performance/analyze`'s response is clearly marked as placeholder/mock.
 
 Run (once deps are installed):
     uvicorn app.main:app --reload
@@ -12,7 +14,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from app.modules.assessment import (
@@ -23,6 +25,7 @@ from app.modules.assessment import (
     ToleranceProfile,
     builtin_profiles,
 )
+from app.modules.musicxml_ingester import MusicXMLIngester
 from app.modules.score_align import (
     Alignment,
     AlignMode,
@@ -31,9 +34,8 @@ from app.modules.score_align import (
 )
 from app.modules.score_ingest import (
     Score,
-    ScoreNote,
+    ScoreIngestError,
     ScoreSourceFormat,
-    TempoReference,
 )
 from app.modules.transcription import (
     DetectedNote,
@@ -41,32 +43,22 @@ from app.modules.transcription import (
     TranscriptionConfig,
 )
 
+_score_ingester = MusicXMLIngester()
+
 app = FastAPI(
     title="Music Copilot API",
     version="0.0.1-skeleton",
-    description="Offline double-bass mistake detection. SKELETON ONLY - all "
-    "analysis endpoints return mock data.",
+    description="Offline double-bass mistake detection. SKELETON - "
+    "/score/import is real (Phase 1), /performance/analyze still "
+    "returns mock data pending Phases 2-3.",
 )
 
 
 # --------------------------------------------------------------------------- #
-# Mock factories - stand-ins until the real modules land.
+# Mock factories - stand-ins until the real modules land. score-ingest (Phase
+# 1) is implemented for real now (see MusicXMLIngester below); transcription,
+# alignment, and assessment are still mocked pending Phases 2-3.
 # --------------------------------------------------------------------------- #
-def _mock_score(score_id: str = "mock-score-1") -> Score:
-    notes = [
-        ScoreNote(index=i, midi=m, pitch_class=m % 12, onset_beats=float(i),
-                  duration_beats=1.0)
-        for i, m in enumerate([43, 45, 47, 48])  # G2 A2 B2 C3
-    ]
-    return Score(
-        score_id=score_id,
-        title="MOCK - C major fragment",
-        source_format=ScoreSourceFormat.MUSICXML,
-        tempo=TempoReference(bpm=60.0),
-        notes=notes,
-    )
-
-
 def _mock_transcription() -> Transcription:
     # Note 2 is deliberately an octave high to exercise the octave-off path.
     notes = [
@@ -116,8 +108,9 @@ def _mock_assessment(profile: ToleranceProfile) -> AssessmentResult:
 # Request / response envelopes
 # --------------------------------------------------------------------------- #
 class ScoreImportResponse(BaseModel):
-    mock: bool = True
+    mock: bool = False  # score-ingest (Phase 1) is real; kept for schema parity with AnalyzeResponse.
     score: Score
+    warnings: list[ScoreIngestError] = []
 
 
 class AnalyzeRequest(BaseModel):
@@ -147,11 +140,42 @@ def list_profiles() -> dict[str, ToleranceProfile]:
 
 
 @app.post("/score/import", response_model=ScoreImportResponse)
-def import_score() -> ScoreImportResponse:
-    """PLACEHOLDER. Real impl: accept a MusicXML/PDF upload, run ScoreIngester,
-    persist, and return the canonical Score.
+async def import_score(
+    file: UploadFile = File(..., description="A MusicXML file (.musicxml/.xml)."),
+    score_id: Optional[str] = Form(default=None),
+    source_format: ScoreSourceFormat = Form(default=ScoreSourceFormat.MUSICXML),
+) -> ScoreImportResponse:
+    """Import a score from an uploaded MusicXML file (Phase 1 of the MVP plan).
+
+    Real implementation: `MusicXMLIngester` (music21 under the hood). Handles
+    `musicxml` and `musicxml_pdf` (a human already converted the PDF to
+    MusicXML by this point). `omr_photo` (phone photo -> OMR) is a v1.5+ path
+    with no implementation yet, and is rejected here.
+
+    Recoverable issues (no tempo marking, chords/multiple voices/parts in
+    what's expected to be a monophonic part) don't fail the request — they
+    come back in `warnings` alongside the best-effort `score`. There is no
+    persistence layer yet; the caller is responsible for holding onto the
+    returned `Score` (e.g. to pass its `score_id` into `/performance/analyze`
+    once that's no longer mocked).
     """
-    return ScoreImportResponse(score=_mock_score())
+    if not _score_ingester.supports(source_format):
+        raise HTTPException(
+            status_code=422,
+            detail=f"source_format={source_format.value!r} is not supported "
+            "yet (only 'musicxml' and 'musicxml_pdf').",
+        )
+
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=422, detail="Uploaded file is empty.")
+
+    try:
+        result = _score_ingester.ingest(raw, source_format, score_id=score_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return ScoreImportResponse(score=result.score, warnings=result.warnings)
 
 
 @app.post("/performance/analyze", response_model=AnalyzeResponse)
