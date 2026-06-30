@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { OpenSheetMusicDisplay } from 'opensheetmusicdisplay';
 import sampleExcerptUrl from '../assets/sample-bass-excerpt.musicxml?url';
-import type { AssessmentResult, ErrorType } from '../types/assessment';
+import type { AssessmentResult } from '../types/assessment';
 import { mockAssessmentResult } from './mockAssessmentResult';
+import { densifyAssessment, type DisplayErrorType } from './assessmentAdapter';
 
 interface ScoreViewProps {
   /**
@@ -13,16 +14,16 @@ interface ScoreViewProps {
   assessment?: AssessmentResult;
 }
 
-/** Color/border mapping for each error type. Kept in one place so the
+/** Color/border mapping for each display category. Kept in one place so the
  * legend and the actual highlight logic can't drift apart. */
-const ERROR_STYLE: Record<
-  ErrorType,
-  { color: string; label: string }
-> = {
+const ERROR_STYLE: Record<DisplayErrorType, { color: string; label: string }> = {
   correct: { color: '#2e7d32', label: 'Correct' },
   wrong_pitch: { color: '#d32f2f', label: 'Wrong pitch' },
-  timing_slip: { color: '#ef6c00', label: 'Timing slip' },
+  octave_off: { color: '#f9a825', label: 'Octave off' },
+  timing_early: { color: '#1976d2', label: 'Timing slip (early)' },
+  timing_late: { color: '#ef6c00', label: 'Timing slip (late)' },
   missed_note: { color: '#9e9e9e', label: 'Missed note' },
+  low_confidence: { color: '#7b1fa2', label: 'Flagged for review' },
 };
 
 export function ScoreView({ assessment = mockAssessmentResult }: ScoreViewProps) {
@@ -65,13 +66,12 @@ export function ScoreView({ assessment = mockAssessmentResult }: ScoreViewProps)
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [assessment]);
 
   return (
     <div className="score-view">
       <div className="score-view__legend">
-        {(Object.keys(ERROR_STYLE) as ErrorType[]).map((type) => (
+        {(Object.keys(ERROR_STYLE) as DisplayErrorType[]).map((type) => (
           <span key={type} className="score-view__legend-item">
             <span
               className="score-view__legend-swatch"
@@ -94,52 +94,57 @@ export function ScoreView({ assessment = mockAssessmentResult }: ScoreViewProps)
 
 /**
  * Walks the OSMD-rendered note sequence in score order and applies a fake
- * mistake's color/outline to each note referenced by `assessment.notes`.
- * This is the core thing Phase 0 needs to prove out: that OSMD exposes
- * enough of a per-note API to drive highlighting from an external
+ * mistake's color/outline to each note referenced by the (densified)
+ * assessment. This is the core thing Phase 0 needs to prove out: that OSMD
+ * exposes enough of a per-note API to drive highlighting from an external
  * (eventually backend-supplied) data structure.
+ *
+ * The backend's wire shape is sparse (mistakes + correct_ref_indices); see
+ * `densifyAssessment` for the conversion to the per-note lookup used here.
  */
 function applyHighlights(osmd: OpenSheetMusicDisplay, assessment: AssessmentResult) {
-  const byIndex = new Map(assessment.notes.map((n) => [n.noteIndex, n]));
+  const { byNoteIndex } = densifyAssessment(assessment);
 
-  // Flatten all GraphicalNotes across all measures/staff entries in score
-  // order, matching the note-index convention documented in
-  // sample-bass-excerpt.musicxml's inline comments.
+  // Flatten all GraphicalNotes across all pages/systems/measures/staff
+  // entries in score order, matching the note-index convention documented
+  // in sample-bass-excerpt.musicxml's inline comments.
   let flatIndex = 0;
   const graphicSheet = osmd.GraphicSheet;
 
-  for (const musicSystem of graphicSheet.MusicSystems) {
-    for (const staffLine of musicSystem.StaffLines) {
-      for (const measure of staffLine.Measures) {
-        for (const staffEntry of measure.staffEntries) {
-          for (const voiceEntry of staffEntry.graphicalVoiceEntries) {
-            for (const note of voiceEntry.notes) {
-              // Skip rests if they're represented as notes with no pitch;
-              // our fixture is monophonic with no rests, but guard anyway.
-              const sourceNote = note.sourceNote;
-              if (sourceNote && sourceNote.isRest()) {
-                continue;
+  for (const musicPage of graphicSheet.MusicPages) {
+    for (const musicSystem of musicPage.MusicSystems) {
+      for (const staffLine of musicSystem.StaffLines) {
+        for (const measure of staffLine.Measures) {
+          for (const staffEntry of measure.staffEntries) {
+            for (const voiceEntry of staffEntry.graphicalVoiceEntries) {
+              for (const note of voiceEntry.notes) {
+                // Skip rests if they're represented as notes with no pitch;
+                // our fixture is monophonic with no rests, but guard anyway.
+                const sourceNote = note.sourceNote;
+                if (sourceNote && sourceNote.isRest()) {
+                  continue;
+                }
+
+                const display = byNoteIndex.get(flatIndex);
+                const errorType: DisplayErrorType = display?.errorType ?? 'correct';
+                const style = ERROR_STYLE[errorType];
+
+                // OSMD's per-note coloring hook: NoteheadColor is read by the
+                // SVG/Canvas backends at render time when re-rendered, and
+                // can also be nudged directly via the note's graphical
+                // representation for an already-rendered sheet.
+                sourceNote.NoteheadColor = style.color;
+
+                if (errorType === 'missed_note') {
+                  // Extra visual treatment beyond color for missed notes:
+                  // OSMD doesn't have a built-in "ghost note" mode, so we
+                  // approximate "outlined/greyed" by also marking it filled=false
+                  // where the engraving rules respect that flag.
+                  sourceNote.PrintObject = true;
+                }
+
+                flatIndex += 1;
               }
-
-              const assessmentForNote = byIndex.get(flatIndex);
-              const errorType: ErrorType = assessmentForNote?.errorType ?? 'correct';
-              const style = ERROR_STYLE[errorType];
-
-              // OSMD's per-note coloring hook: NoteheadColor is read by the
-              // SVG/Canvas backends at render time when re-rendered, and
-              // can also be nudged directly via the note's graphical
-              // representation for an already-rendered sheet.
-              sourceNote.NoteheadColor = style.color;
-
-              if (errorType === 'missed_note') {
-                // Extra visual treatment beyond color for missed notes:
-                // OSMD doesn't have a built-in "ghost note" mode, so we
-                // approximate "outlined/greyed" by also marking it filled=false
-                // where the engraving rules respect that flag.
-                sourceNote.PrintObject = true;
-              }
-
-              flatIndex += 1;
             }
           }
         }

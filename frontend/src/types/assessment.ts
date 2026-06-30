@@ -1,44 +1,60 @@
 /**
- * Shared contract between the (future) backend `assessment` module and the
- * frontend `feedback-ui` module (see music-copilot-mvp-plan.md, modules 6 & 7).
+ * Shared contract between the backend `assessment` module
+ * (backend/app/modules/assessment.py) and the frontend feedback UI.
  *
- * This is the shape the real backend is expected to return once the
- * transcription + alignment pipeline exists. For Phase 0 we only have a
- * hardcoded MOCK instance of this type (see mockAssessmentResult.ts) — no
- * real audio analysis happens yet. Keep this file in sync with whatever the
- * backend module ends up serializing; it's the seam between the two halves
- * of the project.
+ * This mirrors the backend's pydantic models field-for-field, including
+ * field names (snake_case) and nullability, so the JSON the real API
+ * returns can be typed directly with no renaming/translation layer. If
+ * this ever drifts from backend/app/modules/assessment.py, update both
+ * together — that file is the source of truth for the shape.
+ *
+ * The backend's natural shape is SPARSE: it lists mistakes plus a separate
+ * array of correct note indices, rather than one entry per note. The
+ * frontend's rendering code wants a DENSE per-note view (one lookup per
+ * note, defaulting to "correct"). That densification is a frontend-only
+ * concern, kept out of this file — see `densifyAssessment` in
+ * `frontend/src/score/assessmentAdapter.ts`. Don't reintroduce a dense
+ * wire type here; adapt at the UI edge instead.
  */
 
-/** Index into the flat, in-order sequence of notes as OSMD/the score exposes them. */
+/** 0-based position in the monophonic part — matches backend ScoreNote.index. */
 export type NoteIndex = number;
 
-export type ErrorType =
+/** Mirrors backend MistakeType (assessment.py). */
+export type MistakeType =
   /** Performed pitch did not match the expected pitch for this note. */
   | 'wrong_pitch'
-  /** Note was correct but played notably early/late relative to the beat. */
-  | 'timing_slip'
-  /** Expected note was not detected in the performance at all. */
+  /** Same pitch-class, wrong octave. Default policy treats this as a warning, not a hard error. */
+  | 'octave_off'
+  /** Correct pitch, played notably before the expected beat. */
+  | 'timing_early'
+  /** Correct pitch, played notably after the expected beat. */
+  | 'timing_late'
+  /** Score note with no performed match. */
   | 'missed_note'
-  /** Performance matched the expected note within tolerance. */
-  | 'correct';
+  /** Performed note with no score match — has no `ref_index`. */
+  | 'extra_note'
+  /** Transcription confidence too low to trust a pitch verdict; flagged for review. */
+  | 'low_confidence';
 
-export type Severity = 'low' | 'medium' | 'high';
+/** Mirrors backend Severity (assessment.py). */
+export type Severity = 'info' | 'warning' | 'error';
 
-export interface NoteAssessment {
-  noteIndex: NoteIndex;
-  errorType: ErrorType;
-  /** Optional human-readable detail, e.g. "played F2, expected G2". */
-  detail?: string;
-  severity?: Severity;
+/** Mirrors backend Mistake (assessment.py) field-for-field. */
+export interface Mistake {
+  ref_index: NoteIndex | null;
+  performed_index: NoteIndex | null;
+  type: MistakeType;
+  severity: Severity;
+  detail: string | null;
+  cents_off: number | null;
+  timing_error_ms: number | null;
 }
 
-/** Top-level shape of an assessment run, as the backend would return it. */
+/** Mirrors backend AssessmentResult (assessment.py) field-for-field. */
 export interface AssessmentResult {
-  /** Identifies which score this assessment was run against. */
-  scoreId: string;
-  /** One entry per note in the reference score that was evaluated. */
-  notes: NoteAssessment[];
-  /** ISO timestamp of when the assessment was produced. */
-  generatedAt: string;
+  profile_name: string;
+  mistakes: Mistake[];
+  /** Note indices with no mistake — i.e. assessed and correct. */
+  correct_ref_indices: NoteIndex[];
 }

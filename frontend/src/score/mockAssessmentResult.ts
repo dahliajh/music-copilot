@@ -8,44 +8,50 @@ import type { AssessmentResult } from '../types/assessment';
  * `assessment` module will eventually return after analyzing a recording
  * against `sample-bass-excerpt.musicxml`. It exists purely to prove that
  * OSMD's cursor/note API can be driven by a structured result object shaped
- * like this one. Delete/replace this file once the real backend exists —
- * the AssessmentResult type in src/types/assessment.ts is the part that
- * should survive.
+ * like this one.
+ *
+ * Shaped EXACTLY like the real backend would serialize it — sparse
+ * `mistakes` + `correct_ref_indices`, mirroring `_mock_assessment` in
+ * backend/app/main.py — not the dense per-note array this file used to
+ * use. See `src/score/assessmentAdapter.ts` for how `ScoreView` turns this
+ * into the per-note lookup it actually renders from.
  *
  * The excerpt has 10 notes (index 0-9). We fake:
  *  - index 2 -> wrong pitch (red)
- *  - index 5 -> timing slip (orange)
+ *  - index 5 -> timing slip, played late (orange)
  *  - index 7 -> missed note (grey/outlined)
  *  - everything else -> correct (green)
  */
 export const mockAssessmentResult: AssessmentResult = {
-  scoreId: 'sample-bass-excerpt',
-  generatedAt: '2026-06-30T00:00:00.000Z',
-  notes: [
-    { noteIndex: 0, errorType: 'correct' },
-    { noteIndex: 1, errorType: 'correct' },
+  profile_name: 'beginner',
+  mistakes: [
     {
-      noteIndex: 2,
-      errorType: 'wrong_pitch',
+      ref_index: 2,
+      performed_index: 2,
+      type: 'wrong_pitch',
+      severity: 'error',
       detail: 'expected A2, heard A#2',
-      severity: 'high',
+      cents_off: null,
+      timing_error_ms: null,
     },
-    { noteIndex: 3, errorType: 'correct' },
-    { noteIndex: 4, errorType: 'correct' },
     {
-      noteIndex: 5,
-      errorType: 'timing_slip',
+      ref_index: 5,
+      performed_index: 5,
+      type: 'timing_late',
+      severity: 'warning',
       detail: 'played ~140ms late',
-      severity: 'medium',
+      cents_off: null,
+      timing_error_ms: 140,
     },
-    { noteIndex: 6, errorType: 'correct' },
     {
-      noteIndex: 7,
-      errorType: 'missed_note',
+      ref_index: 7,
+      performed_index: null,
+      type: 'missed_note',
+      severity: 'error',
       detail: 'no onset detected near expected beat',
-      severity: 'high',
+      cents_off: null,
+      timing_error_ms: null,
     },
-    { noteIndex: 8, errorType: 'correct' },
-    { noteIndex: 9, errorType: 'correct' },
   ],
+  correct_ref_indices: [0, 1, 3, 4, 6, 8, 9],
 };
