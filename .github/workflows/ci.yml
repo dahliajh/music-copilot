@@ -43,8 +43,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: "npm"
-          cache-dependency-path: frontend/package-lock.json
+        # No npm cache here: actions/setup-node hard-fails if cache-dependency-path
+        # doesn't resolve to a real lock file, and frontend/ has no package-lock.json
+        # committed yet (only `npm install` has been run, never `npm ci`/lockfile
+        # commit). Re-add `cache: npm` + cache-dependency-path once a lockfile exists.
 
       - name: Install dependencies
         working-directory: frontend
