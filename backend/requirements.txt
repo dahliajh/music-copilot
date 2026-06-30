@@ -1,0 +1,21 @@
+# Music Copilot backend dependencies (v1, offline double-bass pipeline).
+# Pinned loosely; tighten once the real modules are implemented.
+
+# --- Web framework ---
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.6
+python-multipart>=0.0.9   # multipart/form-data for audio + score uploads
+
+# --- Score ingest / manipulation (pick one as primary; both listed) ---
+music21>=9.1              # MusicXML parsing, canonical score representation
+partitura>=1.4            # alternative score model; keep for evaluation
+
+# --- Transcription (pitch + onset detection) ---
+librosa>=0.10             # pYIN, onset detection, audio I/O
+soundfile>=0.12           # robust audio file decoding
+numpy>=1.26
+# crepe>=0.0.13           # optional CNN tracker; pulls TensorFlow - enable later
+
+# --- Alignment ---
+dtw-python>=1.4           # offline DTW (v1); subsequence/partial alignment

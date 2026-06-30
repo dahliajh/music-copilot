@@ -1,0 +1,114 @@
+.app {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 24px 16px 64px;
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  color: #1a1a1a;
+}
+
+.app__header {
+  margin-bottom: 32px;
+}
+
+.app__subtitle {
+  color: #555;
+  max-width: 60ch;
+}
+
+.app__section {
+  margin-bottom: 40px;
+}
+
+.app__section h2 {
+  font-size: 1.1rem;
+  margin-bottom: 12px;
+}
+
+.score-view__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 12px;
+  font-size: 0.85rem;
+}
+
+.score-view__legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.score-view__legend-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.score-view__container {
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  padding: 8px;
+  overflow-x: auto;
+}
+
+.score-view__status {
+  font-size: 0.9rem;
+  color: #666;
+}
+
+.score-view__status--error {
+  color: #d32f2f;
+}
+
+.audio-capture__controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.audio-capture__button {
+  padding: 8px 20px;
+  border-radius: 999px;
+  border: none;
+  background: #2e7d32;
+  color: white;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.audio-capture__button--stop {
+  background: #d32f2f;
+}
+
+.audio-capture__button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.audio-capture__status {
+  font-size: 0.85rem;
+  color: #666;
+}
+
+.audio-capture__error {
+  color: #d32f2f;
+  font-size: 0.85rem;
+  max-width: 60ch;
+}
+
+.waveform-canvas {
+  display: block;
+  width: 100%;
+  max-width: 600px;
+  height: 120px;
+  border-radius: 4px;
+  background: #0b0f14;
+}
+
+.audio-capture__playback {
+  margin-top: 12px;
+  font-size: 0.85rem;
+}
