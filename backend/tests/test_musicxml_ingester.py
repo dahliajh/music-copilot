@@ -5,17 +5,32 @@ the same 10-note excerpt the frontend uses for its OSMD spike (copied here
 so backend tests don't depend on the frontend's asset layout); most of the
 rest are small synthetic files built to exercise one edge case each.
 
-`bach_bwv140_7_bass_voice.musicxml` is the one *real* fixture: the bass
-voice of J.S. Bach's chorale "Wachet auf, ruft uns die Stimme" (BWV 140,
-No. 7), extracted from music21's bundled public-domain chorale corpus and
-exported fresh via music21 - real engraving, not hand-typed by us. It's a
-chorale bass *vocal* line rather than a part written for double bass, but
-it's genuinely monophonic, bass-clef, public domain, and exercises real
+`bach_bwv140_7_bass_voice.musicxml` is a *real* fixture: the bass voice of
+J.S. Bach's chorale "Wachet auf, ruft uns die Stimme" (BWV 140, No. 7),
+extracted from music21's bundled public-domain chorale corpus and exported
+fresh via music21 - real engraving, not hand-typed by us. It's a chorale
+bass *vocal* line rather than a part written for double bass, but it's
+genuinely monophonic, bass-clef, public domain, and exercises real
 ties/accidentals - and it's how a real round-trip bug got caught (see
-test_real_world_title_extraction_fallback below). Real double-bass
-method-book excerpts from actual school sheet music are still the better
-long-term validation per the MVP plan (see STATUS.md) - this fixture is a
-stand-in, not a replacement for that.
+test_real_world_bach_chorale_bass_voice).
+
+`simandl_etude1_mm1-3.musicxml` is the first fixture sourced from an actual
+double-bass method book: measures 1-3 of the Contrabass line of Etude
+No. 1 from Simandl's "30 Etudes for the Double Bass" (IMSLP, public
+domain), with the piano accompaniment omitted. Automated OMR was tried
+first - a local engine (oemer) needs model weights from a host outside the
+sandbox's network allowlist, and a "free OMR" web tool turned out to
+return a hardcoded fake file rather than a real conversion - so this is a
+hand transcription from the IMSLP scan, done carefully but NOT pixel-
+verified against the source. Rhythm/structure/tempo marking are read with
+reasonable confidence; exact pitches are a best-effort visual read. Treat
+this as a real-world MusicXML engraving/structure test (a tempo direction
+with words, a dotted note, a multi-measure phrase), not as a musically
+authoritative transcription.
+
+Real double-bass method-book excerpts the developer has personally
+verified are still the better long-term validation per the MVP plan (see
+STATUS.md) - these fixtures are useful stand-ins, not a replacement.
 """
 
 from __future__ import annotations
@@ -168,3 +183,27 @@ def test_real_world_bach_chorale_bass_voice(ingester: MusicXMLIngester) -> None:
     assert max(n.midi for n in score.notes) < 67  # stays well under soprano range
     assert any(w.code == "missing_tempo" for w in result.warnings)  # chorale exports have none
     assert not any(w.code in ("chord_in_monophonic_part", "multiple_voices") for w in result.warnings)
+
+
+def test_real_method_book_simandl_etude(ingester: MusicXMLIngester) -> None:
+    """First fixture sourced from an actual double-bass method book.
+
+    Hand-transcribed (not OMR-verified, see module docstring) from the
+    IMSLP scan of Simandl's 30 Etudes, Etude No. 1, mm. 1-3, Contrabass
+    line only. Checks the structural things this fixture was built to
+    exercise: explicit tempo from a <sound tempo=.../> + tempo word
+    ("Maestoso"), a dotted-note duration, and a clean multi-measure
+    monophonic phrase with no warnings.
+    """
+    result = ingester.ingest(
+        _read("simandl_etude1_mm1-3.musicxml"), ScoreSourceFormat.MUSICXML
+    )
+    score = result.score
+
+    assert score.tempo.bpm == 100.0
+    assert result.warnings == []  # explicit tempo, single part/voice, no chords
+    assert len(score.notes) == 6
+    assert [n.index for n in score.notes] == list(range(6))
+    # Dotted half (3 beats) immediately before the closing quarter note.
+    assert score.notes[4].duration_beats == 3.0
+    assert score.notes[5].duration_beats == 1.0

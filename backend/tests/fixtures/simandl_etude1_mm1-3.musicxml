@@ -1,0 +1,139 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 3.1 Partwise//EN" "http://www.musicxml.org/dtds/partwise.dtd">
+<score-partwise version="3.1">
+  <work>
+    <work-title>30 Etudes for the Double Bass, No. 1 (mm. 1-3, Contrabass part)</work-title>
+  </work>
+  <identification>
+    <creator type="composer">Franz Simandl</creator>
+    <encoding>
+      <encoding-date>2026-06-30</encoding-date>
+      <software>Hand-transcribed by Claude from the IMSLP scan (Part I, p.1) for Music Copilot testing</software>
+    </encoding>
+  </identification>
+  <!--
+    NOT a verified transcription. Hand-read from a screenshot/scan of the
+    IMSLP public-domain edition (Simandl, 30 Etudes for the Double Bass,
+    Pt. I, p.1, Etude No. 1, Contrabass staff only - the piano accompaniment
+    is omitted). Rhythm/structure (4/4, half notes descending then a
+    dotted-half + quarter cadential figure, Maestoso quarter=100, forte) is
+    read with reasonable confidence; exact pitches are a best-effort visual
+    read, not pixel-verified OMR - automated OMR was attempted first
+    (oemer: blocked, needs model weights from a non-allowlisted host;
+    a "free OMR" web tool: returned a fake hardcoded stub, not a real
+    conversion) before falling back to manual transcription. Treat this
+    fixture as a real-world MusicXML structure/engraving test for the
+    ingester, not as a musically authoritative source - cross-check
+    against the original IMSLP scan if exact pitch accuracy matters.
+  -->
+  <part-list>
+    <score-part id="P1">
+      <part-name>Double Bass</part-name>
+      <part-abbreviation>D.B.</part-abbreviation>
+    </score-part>
+  </part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes>
+        <divisions>2</divisions>
+        <key>
+          <fifths>0</fifths>
+        </key>
+        <time>
+          <beats>4</beats>
+          <beat-type>4</beat-type>
+        </time>
+        <clef>
+          <sign>F</sign>
+          <line>4</line>
+        </clef>
+      </attributes>
+      <direction placement="above">
+        <direction-type>
+          <words>Maestoso</words>
+        </direction-type>
+        <sound tempo="100"/>
+      </direction>
+      <!-- note index 0 -->
+      <note>
+        <pitch>
+          <step>D</step>
+          <octave>3</octave>
+        </pitch>
+        <duration>4</duration>
+        <voice>1</voice>
+        <type>half</type>
+        <notations>
+          <dynamics>
+            <f/>
+          </dynamics>
+        </notations>
+      </note>
+      <direction placement="below">
+        <direction-type>
+          <dynamics>
+            <f/>
+          </dynamics>
+        </direction-type>
+      </direction>
+      <!-- note index 1 -->
+      <note>
+        <pitch>
+          <step>C</step>
+          <octave>3</octave>
+        </pitch>
+        <duration>4</duration>
+        <voice>1</voice>
+        <type>half</type>
+      </note>
+    </measure>
+    <measure number="2">
+      <!-- note index 2 -->
+      <note>
+        <pitch>
+          <step>B</step>
+          <octave>2</octave>
+        </pitch>
+        <duration>4</duration>
+        <voice>1</voice>
+        <type>half</type>
+      </note>
+      <!-- note index 3 -->
+      <note>
+        <pitch>
+          <step>A</step>
+          <octave>2</octave>
+        </pitch>
+        <duration>4</duration>
+        <voice>1</voice>
+        <type>half</type>
+      </note>
+    </measure>
+    <measure number="3">
+      <!-- note index 4 -->
+      <note>
+        <pitch>
+          <step>G</step>
+          <octave>2</octave>
+        </pitch>
+        <duration>6</duration>
+        <voice>1</voice>
+        <type>half</type>
+        <dot/>
+      </note>
+      <!-- note index 5 -->
+      <note>
+        <pitch>
+          <step>C</step>
+          <octave>3</octave>
+        </pitch>
+        <duration>2</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+      </note>
+      <barline location="right">
+        <bar-style>light-heavy</bar-style>
+      </barline>
+    </measure>
+  </part>
+</score-partwise>
