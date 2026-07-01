@@ -25,6 +25,17 @@
     fixture as a real-world MusicXML structure/engraving test for the
     ingester, not as a musically authoritative source - cross-check
     against the original IMSLP scan if exact pitch accuracy matters.
+
+    <transpose> below declares double bass's standard notation convention
+    (written a full octave above sounding pitch) - the pitches typed into
+    each <note> are WRITTEN staff positions, i.e. exactly what's read off
+    the page. MusicXMLIngester calls toSoundingPitch() before extracting
+    notes, so the ingested Score's MIDI values end up an octave lower than
+    what's typed here - matching the actual sounding pitch a real
+    recording's pitch tracker would detect. This was found via a real
+    double bass player's account of their own recording (open A string
+    written as A3 in this etude's book, but sounds A2) - see git history/
+    STATUS.md for the fuller writeup.
   -->
   <part-list>
     <score-part id="P1">
@@ -47,6 +58,11 @@
           <sign>F</sign>
           <line>4</line>
         </clef>
+        <transpose>
+          <diatonic>0</diatonic>
+          <chromatic>0</chromatic>
+          <octave-change>-1</octave-change>
+        </transpose>
       </attributes>
       <direction placement="above">
         <direction-type>

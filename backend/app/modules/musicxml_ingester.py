@@ -92,6 +92,18 @@ class MusicXMLIngester(ScoreIngester):
         except Exception as exc:  # music21 raises several distinct error types
             raise ValueError(f"Could not parse MusicXML: {exc}") from exc
 
+        # Double bass (like guitar) is a transposing instrument: it's
+        # notated an octave above where it actually sounds, and a real
+        # MusicXML export for a "Double Bass" part declares this via
+        # <transpose><octave-change>-1</octave-change></transpose>.
+        # Downstream, ScoreNote.midi is compared directly against pitches
+        # a real pitch tracker detects from real audio - i.e. sounding
+        # pitch - so we must convert here, not leave notes at written
+        # pitch. toSoundingPitch() is a no-op for parts with no declared
+        # transposition (e.g. a vocal bass line), so this is safe for
+        # non-transposing sources too.
+        parsed = parsed.toSoundingPitch()
+
         warnings: list[ScoreIngestError] = []
 
         part, part_warning = _select_part(parsed)

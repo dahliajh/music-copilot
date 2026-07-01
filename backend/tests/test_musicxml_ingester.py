@@ -202,6 +202,24 @@ def test_musicxml_pdf_source_marks_every_note_needs_review(ingester: MusicXMLIng
     assert score.needs_manual_correction is True
 
 
+def test_double_bass_transposing_instrument_converts_to_sounding_pitch(
+    ingester: MusicXMLIngester,
+) -> None:
+    """Double bass (like guitar) is notated an octave above where it
+    sounds. This was missed until a real player pointed out that a note
+    written as A3 in a piece they were recording actually sounds A2 (the
+    open A string) - see the fixture's own comment. ScoreNote.midi has to
+    be SOUNDING pitch, since it's compared directly against a pitch
+    tracker's output from real audio, not against the printed page.
+    MusicXMLIngester must call toSoundingPitch() so a real notation-
+    software export's <transpose> element is honored."""
+    result = ingester.ingest(
+        _read("double_bass_transposing_instrument.musicxml"), ScoreSourceFormat.MUSICXML
+    )
+    notes = result.score.notes
+    assert [n.midi for n in notes] == [45, 48]  # A2, C3 - sounding, not written A3/C4
+
+
 def test_real_method_book_simandl_etude(ingester: MusicXMLIngester) -> None:
     """First fixture sourced from an actual double-bass method book.
 
@@ -209,8 +227,12 @@ def test_real_method_book_simandl_etude(ingester: MusicXMLIngester) -> None:
     IMSLP scan of Simandl's 30 Etudes, Etude No. 1, mm. 1-3, Contrabass
     line only. Checks the structural things this fixture was built to
     exercise: explicit tempo from a <sound tempo=.../> + tempo word
-    ("Maestoso"), a dotted-note duration, and a clean multi-measure
-    monophonic phrase with no warnings.
+    ("Maestoso"), a dotted-note duration, a clean multi-measure monophonic
+    phrase with no warnings, and - since this fixture is what caught the
+    written-vs-sounding-pitch bug - that the ingested MIDI values are
+    SOUNDING pitch (D2 C2 B1 A1 G1 C2), one octave below what's literally
+    typed in the fixture's <pitch> elements (D3 C3 B2 A2 G2 C3), via the
+    fixture's <transpose><octave-change>-1</octave-change></transpose>.
     """
     result = ingester.ingest(
         _read("simandl_etude1_mm1-3.musicxml"), ScoreSourceFormat.MUSICXML
@@ -221,6 +243,9 @@ def test_real_method_book_simandl_etude(ingester: MusicXMLIngester) -> None:
     assert result.warnings == []  # explicit tempo, single part/voice, no chords
     assert len(score.notes) == 6
     assert [n.index for n in score.notes] == list(range(6))
+    # Sounding pitch (D2 C2 B1 A1 G1 C2) - an octave below the written D3
+    # C3 B2 A2 G2 C3 in the XML, per the double-bass transpose element.
+    assert [n.midi for n in score.notes] == [38, 36, 35, 33, 31, 36]
     # Dotted half (3 beats) immediately before the closing quarter note.
     assert score.notes[4].duration_beats == 3.0
     assert score.notes[5].duration_beats == 1.0

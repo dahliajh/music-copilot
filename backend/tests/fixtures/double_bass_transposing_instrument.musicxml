@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 3.1 Partwise//EN" "http://www.musicxml.org/dtds/partwise.dtd">
+<score-partwise version="3.1">
+  <!--
+    Synthetic fixture, not a real piece. Exercises real-world double bass
+    notation's transposing-instrument convention (written a full octave
+    above sounding pitch) independent of any transcription-accuracy
+    question - see simandl_etude1_mm1-3.musicxml's comment for how this
+    was actually discovered (a real double bass player's account of their
+    own recording: an open string written as A3 in this piece's book, but
+    sounds A2). <transpose><octave-change>-1</octave-change></transpose>
+    is the standard way real notation software (Finale/Sibelius/MuseScore)
+    declares this for a Double Bass part.
+  -->
+  <part-list>
+    <score-part id="P1">
+      <part-name>Double Bass</part-name>
+      <part-abbreviation>D.B.</part-abbreviation>
+    </score-part>
+  </part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes>
+        <divisions>2</divisions>
+        <key>
+          <fifths>0</fifths>
+        </key>
+        <time>
+          <beats>4</beats>
+          <beat-type>4</beat-type>
+        </time>
+        <clef>
+          <sign>F</sign>
+          <line>4</line>
+        </clef>
+        <transpose>
+          <diatonic>0</diatonic>
+          <chromatic>0</chromatic>
+          <octave-change>-1</octave-change>
+        </transpose>
+      </attributes>
+      <!-- note index 0: written A3 -> sounds A2 (midi 45) -->
+      <note>
+        <pitch>
+          <step>A</step>
+          <octave>3</octave>
+        </pitch>
+        <duration>4</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+      </note>
+      <!-- note index 1: written C4 -> sounds C3 (midi 48) -->
+      <note>
+        <pitch>
+          <step>C</step>
+          <octave>4</octave>
+        </pitch>
+        <duration>4</duration>
+        <voice>1</voice>
+        <type>quarter</type>
+      </note>
+    </measure>
+  </part>
+</score-partwise>
