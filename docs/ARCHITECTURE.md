@@ -80,6 +80,53 @@ canonical `Score`.
   needs ~50–100 ms windows, which fights onset precision). `min_midi`/`max_midi`
   encode the **range prior** that suppresses octave jumps.
 
+### Implementation notes (pyin_transcriber.py)
+
+The v1 implementation (`PyinPitchTracker` + `RangeClampOctaveCorrector` +
+`PyinTranscriber` facade) exists as of the tempo-elastic-timing commit's
+follow-up. `RangeClampOctaveCorrector` is exactly the simplest policy this
+section names above — shift by whole octaves into `[min_midi, max_midi]`,
+nothing smarter yet.
+
+The real design problem turned out to be **note segmentation, not pitch
+estimation** — deciding where one note ends and the next begins. Amplitude-
+based onset detection (`librosa.onset.onset_detect`) is accurate when it
+finds a boundary, but bowed-string **slurs produce no new attack transient**,
+so it silently misses exactly those boundaries. Validated against a real
+recording (Rabbath Étude No. 1, played freely): pure onset detection
+under-segmented a 62-note passage by roughly a third, concentrated at the
+slurred spots the player had flagged in advance. `_split_oversized_segments`
+fixes this without needing to know in advance which notes are slurred: a
+segment much longer than the piece's own median note duration probably
+swallowed more than one note, and only *those* segments get sub-split by
+pitch-change (the one signal a slur still leaves). Tried the reverse first
+(segment everything by smoothed pitch-change) — it caught more note events
+but was *less* pitch-accurate and added a systematic onset-timing lag (the
+smoothing needed to reject frame-to-frame jitter also delays exactly when a
+boundary gets reported), which is what motivated the tempo-elastic timing
+fix in `rule_based_assessor.py` in the first place. The hybrid beat both
+pure approaches on the real recording (see STATUS.md for the numbers).
+
+Near-zero-confidence segments (`MIN_CONFIDENCE = 0.03`) are dropped
+entirely rather than reported as low-confidence notes — validated as real
+pre-performance noise floor (bow/tuning noise), not musical content, by
+checking the raw audio energy directly (no silence gap existed where the
+noise-floor segments were).
+
+Wired into the API via `/performance/analyze_recording` (multipart audio
+upload), kept separate from the original JSON-only `/performance/analyze`
+(still `_mock_transcription()`) so nothing that already depends on that
+endpoint's contract changes. Audio-format decoding (WAV → mono PCM16)
+happens at the HTTP boundary in `main.py`, not inside `PitchTracker`, so
+the tracker's own contract (raw PCM + explicit sample rate) stays simple
+to unit-test with synthesized sine-wave audio — no real recording is
+committed to this repo to test against.
+
+Not yet validated: multiple pieces/tempos, or the `OVERSIZED_FACTOR`/
+`MIN_CONFIDENCE` thresholds against anything beyond the one real
+recording used during development. This is exactly the labeled eval
+harness gap risk area #7 already calls out.
+
 ---
 
 ## 3. `score_align.py` (the hard one)

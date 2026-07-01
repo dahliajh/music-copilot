@@ -5,20 +5,19 @@ persistence seam (`score_store.py`) so a score imported in one request can
 be looked up by id in another.
 
   * score-ingest (`/score/import`): REAL (MusicXMLIngester, Phase 1).
-    Imported scores are now persisted (`InMemoryScoreStore`) so a later
-    `/performance/analyze` call can look them up by `score_id`.
-  * score-align and assessment, inside `/performance/analyze`: REAL
-    (OfflineDtwAligner, RuleBasedAssessor). If `req.score_id` matches a
-    previously-imported score, alignment/assessment run against that REAL
-    score. Unknown ids other than the reserved demo id are a 404.
-  * transcription, inside `/performance/analyze`: STILL MOCK. There's no
-    real pitch tracker yet (Phase 2 - needs hand-labeled recordings from
-    the developer per the MVP plan's evaluation strategy, not started).
-    `_mock_transcription()` stands in for it. Because of that, aligning a
-    real imported score against the mock performance's fixed 4 notes is
-    only meaningful for a small demo score with matching content -
-    `AnalyzeResponse.mock=True` still reflects that the pipeline's audio
-    side is a placeholder even though the score side may now be real.
+    Imported scores are persisted (`InMemoryScoreStore`) so a later
+    analyze call can look them up by `score_id`.
+  * score-align and assessment: REAL (OfflineDtwAligner,
+    RuleBasedAssessor - including tempo-elastic timing, see
+    rule_based_assessor.py) in both analyze endpoints below.
+  * transcription (Phase 2): REAL as of pyin_transcriber.py
+    (PyinPitchTracker + RangeClampOctaveCorrector), but only reachable
+    through `/performance/analyze_recording` (multipart audio upload).
+    `/performance/analyze` (JSON body, no audio field) still uses
+    `_mock_transcription()` - kept as its own unchanged endpoint rather
+    than retrofitted, so nothing that already depends on its JSON
+    contract breaks. New callers with real audio should use
+    `/performance/analyze_recording`.
 
 Run (once deps are installed):
     uvicorn app.main:app --reload
@@ -26,6 +25,7 @@ Run (once deps are installed):
 
 from __future__ import annotations
 
+import io
 from typing import Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -38,6 +38,7 @@ from app.modules.assessment import (
 )
 from app.modules.musicxml_ingester import MusicXMLIngester
 from app.modules.offline_dtw_aligner import OfflineDtwAligner
+from app.modules.pyin_transcriber import PyinTranscriber
 from app.modules.rule_based_assessor import RuleBasedAssessor
 from app.modules.score_align import (
     Alignment,
@@ -61,6 +62,7 @@ _score_ingester = MusicXMLIngester()
 _aligner = OfflineDtwAligner()
 _assessor = RuleBasedAssessor()
 _score_store = InMemoryScoreStore()
+_transcriber = PyinTranscriber()
 
 # Sentinel id for the fixed demo reference score (see _mock_reference_score),
 # kept requestable by name so the octave-off demo scenario still works
@@ -201,40 +203,57 @@ async def import_score(
     return ScoreImportResponse(score=result.score, warnings=result.warnings)
 
 
+def _resolve_score(score_id: str) -> Score:
+    """Shared score_id -> Score lookup used by both analyze endpoints.
+    `_MOCK_REFERENCE_SCORE_ID` always works (no import needed); anything
+    else must have been imported via `/score/import` in this process, or
+    it's a 404 - it means "not imported here", not "feature unimplemented".
+    """
+    if score_id == _MOCK_REFERENCE_SCORE_ID:
+        return _mock_reference_score()
+    score = _score_store.get(score_id)
+    if score is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No score with score_id={score_id!r} has been "
+            "imported in this process. Call /score/import first, or "
+            f"use score_id={_MOCK_REFERENCE_SCORE_ID!r} for the demo "
+            "reference score.",
+        )
+    return score
+
+
+def _decode_audio_to_mono_pcm16(raw: bytes) -> tuple[bytes, int]:
+    """Decode an uploaded audio file (WAV/FLAC/most soundfile-supported
+    formats) into mono 16-bit PCM bytes + sample rate - the contract
+    `PitchTracker.transcribe()` expects (see pyin_transcriber.py). Real
+    file-format decoding lives here, at the HTTP boundary, so the
+    PitchTracker itself stays on the simpler raw-PCM contract that's easy
+    to unit-test with synthesized audio.
+    """
+    import numpy as np
+    import soundfile as sf
+
+    data, sample_rate = sf.read(io.BytesIO(raw), dtype="int16", always_2d=False)
+    if data.ndim > 1:
+        # Multi-channel: average to mono rather than picking one channel.
+        data = data.mean(axis=1).astype(np.int16)
+    return data.tobytes(), int(sample_rate)
+
+
 @app.post("/performance/analyze", response_model=AnalyzeResponse)
 def analyze_performance(req: AnalyzeRequest) -> AnalyzeResponse:
-    """PARTIALLY REAL. The transcription is still `_mock_transcription()`
-    (no real pitch tracker - Phase 2 hasn't landed), but `req.score_id` is
-    now looked up for real against whatever was imported via
-    `/score/import`: alignment and assessment run against that REAL score.
-
-    `req.score_id == "mock-reference"` (or omitting a prior import
-    entirely) falls back to the fixed 4-note demo score
-    (`_mock_reference_score()`) matching the mock transcription, so the
-    octave-off demo scenario keeps working without importing a file
-    first. Any other unrecognized `score_id` is a 404 - it means the
-    caller hasn't imported that score in this process, not that the
-    feature is unimplemented.
-
-    Once Phase 2 (real transcription) lands, only `_mock_transcription()`
-    needs to change - the score lookup, align/assess/response wiring is
-    the real, final shape.
+    """Score lookup and alignment/assessment are real; transcription is
+    still `_mock_transcription()` - this endpoint has no way to receive
+    audio (JSON body only, matching how it's always worked). For real
+    audio, use `/performance/analyze_recording` (multipart file upload),
+    which runs the fully real pipeline via `PyinTranscriber`. Kept
+    separate rather than merged into one endpoint so this JSON contract -
+    and everything that already depends on it - doesn't change.
     """
     profiles = builtin_profiles()
     profile = profiles.get(req.profile_name, profiles["beginner"])
-
-    if req.score_id == _MOCK_REFERENCE_SCORE_ID:
-        score = _mock_reference_score()
-    else:
-        score = _score_store.get(req.score_id)
-        if score is None:
-            raise HTTPException(
-                status_code=404,
-                detail=f"No score with score_id={req.score_id!r} has been "
-                "imported in this process. Call /score/import first, or "
-                f"use score_id={_MOCK_REFERENCE_SCORE_ID!r} for the demo "
-                "reference score.",
-            )
+    score = _resolve_score(req.score_id)
 
     transcription = _mock_transcription()
 
@@ -242,6 +261,49 @@ def analyze_performance(req: AnalyzeRequest) -> AnalyzeResponse:
     assessment = _assessor.assess(alignment, score, transcription, profile)
 
     return AnalyzeResponse(
+        transcription=transcription,
+        alignment=alignment,
+        assessment=assessment,
+    )
+
+
+@app.post("/performance/analyze_recording", response_model=AnalyzeResponse)
+async def analyze_recording(
+    audio: UploadFile = File(..., description="An audio file (WAV or other soundfile-supported format)."),
+    score_id: str = Form(...),
+    profile_name: str = Form(default="beginner"),
+) -> AnalyzeResponse:
+    """FULLY REAL pipeline: real transcription (`PyinTranscriber`, Phase 2)
+    + real alignment + real assessment, against an uploaded audio
+    recording and a previously-imported (or the fixed demo) score.
+
+    This is genuinely new - Phase 2 didn't have a code path at all before
+    (only `/performance/analyze`'s hardcoded mock existed). Validated
+    against a real recording during development (see STATUS.md for the
+    numbers), not just synthetic test audio - but that validation used
+    ad hoc scripts, not this endpoint itself, so treat first real calls
+    here as still somewhat unproven end-to-end.
+    """
+    profiles = builtin_profiles()
+    profile = profiles.get(profile_name, profiles["beginner"])
+    score = _resolve_score(score_id)
+
+    raw = await audio.read()
+    if not raw:
+        raise HTTPException(status_code=422, detail="Uploaded audio file is empty.")
+
+    try:
+        pcm16, sample_rate = _decode_audio_to_mono_pcm16(raw)
+    except Exception as exc:  # soundfile raises several distinct error types
+        raise HTTPException(status_code=422, detail=f"Could not decode audio: {exc}") from exc
+
+    transcription = _transcriber.run(pcm16, sample_rate)
+
+    alignment = _aligner.align(transcription, score, AlignConfig())
+    assessment = _assessor.assess(alignment, score, transcription, profile)
+
+    return AnalyzeResponse(
+        mock=False,
         transcription=transcription,
         alignment=alignment,
         assessment=assessment,
