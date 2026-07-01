@@ -220,8 +220,25 @@ make room for them but **do not solve them** — implementation work must:
    DTW gives alignment, not error classification; the `gap_cost_threshold` lives
    in alignment, but wrong-note severity is assessment's. Keep the boundary
    clean.
-6. **Click-track requirement (ingest/tempo).** v1 assessment assumes a fixed
-   tempo / optional click track so "rushed" vs. "wrong" is well-defined. Free
-   tempo is deferred.
+6. **Click-track requirement (ingest/tempo) — partially resolved.** v1
+   originally assumed a fixed tempo / click track so "rushed" vs. "wrong" is
+   well-defined. `RuleBasedAssessor` now builds a `_TempoCurve` from the
+   alignment's own matched notes (leave-one-out local interpolation) instead
+   of a single fixed `score.tempo.bpm`, so free/expressive playing doesn't
+   generate runaway false "late" verdicts as real pace drifts from the
+   printed tempo — validated against a real recording (Rabbath Étude No. 1,
+   lines 1-2): correct-note coverage went from 2/62 to 14/62 and
+   timing-related mistakes dropped from 21 to 9 on the same transcription,
+   changing nothing but the timing model. Still NOT a full solution: it's a
+   local-neighbor smoothing heuristic, not a tempo model, so it can't
+   distinguish "decelerating through a hard passage" from "one rushed note"
+   any better than eyeballing a few neighbors could, a single badly-mistimed
+   note visibly distorts its immediate neighbors' local estimates too (see
+   `_TempoCurve`'s docstring and `test_note_genuinely_out_of_place_is_still_
+   caught_despite_drift`'s "containment, not full isolation" assertions),
+   and it still can't tell an intentional pause from a mistake. A true
+   tempo-tracking model (e.g. a smoothed/regularized tempo curve fit, or a
+   proper local-warping model) is future work if this heuristic proves
+   insufficient in the eval harness below.
 7. **False-positive rate is the headline metric (assessment).** Build the
    labeled eval harness (plan section 5) and track precision/recall, FP-first.

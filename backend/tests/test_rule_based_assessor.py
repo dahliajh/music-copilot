@@ -260,6 +260,90 @@ def test_low_confidence_does_not_suppress_timing_mistakes(assessor: RuleBasedAss
     assert result.mistakes[0].type == MistakeType.TIMING_LATE
 
 
+def test_gradual_tempo_drift_does_not_generate_false_late_verdicts(assessor: RuleBasedAssessor) -> None:
+    """The real-world bug this feature fixes: a performer who plays freely
+    (not to a click track) and gradually slows down should NOT accumulate
+    growing "late" mistakes just because their overall pace drifted from
+    the printed tempo - as long as they're internally consistent with their
+    OWN pace. Score is 5 quarter notes at 60bpm (1 beat = 1s); performance
+    plays the same notes but increasingly slower (drifting up to 800ms
+    "late" of the fixed-tempo expectation by note 4) - a real recording's
+    kind of gradual rubato, not a click-track performance."""
+    score = _score([_note(i, 40 + i, float(i)) for i in range(5)])
+    # onsets: 0.0, 1.1, 2.3, 3.6, 5.0 - increasingly slower than 1s/beat,
+    # but each individual gap is close to its neighbors' pace.
+    onsets = [0.0, 1.1, 2.3, 3.6, 5.0]
+    performance = _performance([_detected(i, 40 + i, onsets[i]) for i in range(5)])
+    alignment = _alignment([NotePair(ref_index=i, performed_index=i) for i in range(5)])
+
+    result = assessor.assess(alignment, score, performance, PROFILE)
+
+    timing_mistakes = [m for m in result.mistakes if m.type in (MistakeType.TIMING_LATE, MistakeType.TIMING_EARLY)]
+    assert timing_mistakes == [], (
+        f"expected no timing mistakes under gradual drift, got {timing_mistakes}"
+    )
+
+
+def test_note_genuinely_out_of_place_is_still_caught_despite_drift(assessor: RuleBasedAssessor) -> None:
+    """Tempo-elasticity must not become "nothing is ever late". A note that's
+    genuinely early relative to ITS NEIGHBORS - not just relative to a fixed
+    bpm - should still be flagged, even inside an otherwise-drifting
+    performance.
+
+    Honest note on what this test does NOT claim: because the curve is
+    built from immediate neighbors (see _TempoCurve's docstring), a single
+    badly-mistimed note visibly distorts its two immediate neighbors' local
+    slope estimates too - that's an inherent property of any simple local
+    method, not a bug, and this test doesn't pretend otherwise. What it
+    does assert: the genuinely mistimed note is caught, its deviation is
+    unambiguously the largest, and the distortion does NOT cascade past its
+    immediate neighbors to the rest of an otherwise well-behaved take.
+    """
+    score = _score([_note(i, 40 + i, float(i)) for i in range(7)])
+    # Notes 0,1,2,4,5,6 follow a smoothly-drifting pace (increasing gaps,
+    # same "free performance" pattern as the drift test above). Note 3 is
+    # genuinely rushed - played ~900ms earlier than that smooth pace would
+    # predict - well clear of either boundary so this isn't an
+    # extrapolation edge case.
+    onsets = [0.0, 1.03, 2.12, 2.5, 4.65, 6.05, 7.6]
+    performance = _performance([_detected(i, 40 + i, onsets[i]) for i in range(7)])
+    alignment = _alignment([NotePair(ref_index=i, performed_index=i) for i in range(7)])
+    # Wider tolerance than PROFILE's 100ms: the point of this test is the
+    # anomaly vs. its neighbors' relative sizes, not tuning exact numbers
+    # to dodge float-boundary coincidences in the "normal drift" residual.
+    profile = PROFILE.model_copy(update={"timing_tolerance_ms": 200.0})
+
+    result = assessor.assess(alignment, score, performance, profile)
+
+    timing_mistakes = [m for m in result.mistakes if m.type in (MistakeType.TIMING_LATE, MistakeType.TIMING_EARLY)]
+    assert timing_mistakes, "the genuinely mistimed note should be caught"
+    by_ref = {m.ref_index: m for m in timing_mistakes}
+    assert 3 in by_ref
+    assert by_ref[3].type == MistakeType.TIMING_EARLY
+    largest = max(timing_mistakes, key=lambda m: abs(m.timing_error_ms))
+    assert largest.ref_index == 3, "the true anomaly should dominate, not a neighbor"
+    # Containment: notes 0, 1, 5, 6 are far enough from the anomaly that
+    # they must stay clean - only its immediate neighbors (2, 4) may show
+    # secondary distortion.
+    assert {m.ref_index for m in timing_mistakes} <= {2, 3, 4}
+
+
+def test_single_matched_note_falls_back_to_fixed_tempo(assessor: RuleBasedAssessor) -> None:
+    """With fewer than 2 OTHER matched anchors there's nothing to
+    interpolate from, so timing falls back to score.tempo.bpm exactly as
+    before this feature existed - this is what keeps every pre-existing
+    single/near-empty-alignment test in this file passing unchanged."""
+    score = _score([_note(0, 43, 2.0)])  # onset at 2s under 60bpm
+    performance = _performance([_detected(0, 43, 2.5)])  # 500ms late
+    alignment = _alignment([NotePair(ref_index=0, performed_index=0)])
+
+    result = assessor.assess(alignment, score, performance, PROFILE)
+
+    assert len(result.mistakes) == 1
+    assert result.mistakes[0].type == MistakeType.TIMING_LATE
+    assert result.mistakes[0].timing_error_ms == pytest.approx(500.0)
+
+
 def test_beginner_profile_is_more_forgiving_than_advanced() -> None:
     assessor = RuleBasedAssessor()
     profiles = builtin_profiles()
