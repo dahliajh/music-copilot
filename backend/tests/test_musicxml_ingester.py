@@ -185,6 +185,23 @@ def test_real_world_bach_chorale_bass_voice(ingester: MusicXMLIngester) -> None:
     assert not any(w.code in ("chord_in_monophonic_part", "multiple_voices") for w in result.warnings)
 
 
+def test_musicxml_pdf_source_marks_every_note_needs_review(ingester: MusicXMLIngester) -> None:
+    """MUSICXML_PDF means a person hand-converted a PDF/photo to MusicXML -
+    that conversion step is exactly what needs_review exists to flag, per
+    score_ingest.py's contract. Same bytes as the plain-MUSICXML happy path,
+    parsed identically except every note now needs_review, and the whole
+    Score reports needs_manual_correction."""
+    result = ingester.ingest(
+        _read("sample_bass_excerpt.musicxml"), ScoreSourceFormat.MUSICXML_PDF
+    )
+    score = result.score
+
+    assert score.source_format == ScoreSourceFormat.MUSICXML_PDF
+    assert len(score.notes) == 10
+    assert all(n.needs_review for n in score.notes)
+    assert score.needs_manual_correction is True
+
+
 def test_real_method_book_simandl_etude(ingester: MusicXMLIngester) -> None:
     """First fixture sourced from an actual double-bass method book.
 

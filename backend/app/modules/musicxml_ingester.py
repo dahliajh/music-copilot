@@ -55,10 +55,14 @@ DEFAULT_BPM = 60.0
 class MusicXMLIngester(ScoreIngester):
     """v1 ScoreIngester: parses clean MusicXML via music21.
 
-    Handles `ScoreSourceFormat.MUSICXML` and `MUSICXML_PDF` identically —
-    "PDF" in that source format describes a human conversion step that
-    already happened before the bytes reach this class, not a different
-    parser path. `OMR_PHOTO` is v1.5+ and not implemented here.
+    Handles `ScoreSourceFormat.MUSICXML` and `MUSICXML_PDF` with the same
+    parser — "PDF" in that source format describes a human conversion step
+    that already happened before the bytes reach this class, not a
+    different parser path. The one behavioral difference: `MUSICXML_PDF`
+    marks every resulting note `needs_review=True`, since the conversion
+    step itself (a person reading noteheads off a page/photo) is exactly
+    the kind of unverified step `needs_review` exists for — see
+    `score_ingest.py`. `OMR_PHOTO` is v1.5+ and not implemented here.
     """
 
     def supports(self, source_format: ScoreSourceFormat) -> bool:
@@ -102,7 +106,14 @@ class MusicXMLIngester(ScoreIngester):
         if tempo_warning:
             warnings.append(tempo_warning)
 
-        notes, note_warnings = _extract_notes(part)
+        # MUSICXML_PDF means a human converted a PDF/photo to MusicXML by
+        # hand (see ScoreSourceFormat docstring) - that conversion step
+        # itself is the unverified part, independent of anything music21
+        # can detect. Every note gets needs_review=True so Score.needs_
+        # manual_correction (and any future UI) surfaces it, rather than
+        # treating a hand-transcription the same as trusted MusicXML.
+        mark_needs_review = source_format == ScoreSourceFormat.MUSICXML_PDF
+        notes, note_warnings = _extract_notes(part, mark_needs_review=mark_needs_review)
         warnings.extend(note_warnings)
 
         score = Score(
@@ -173,7 +184,9 @@ def _extract_tempo(parsed) -> tuple[TempoReference, Optional[ScoreIngestError]]:
     )
 
 
-def _extract_notes(part) -> tuple[list[ScoreNote], list[ScoreIngestError]]:
+def _extract_notes(
+    part, *, mark_needs_review: bool = False
+) -> tuple[list[ScoreNote], list[ScoreIngestError]]:
     elements = list(part.flatten().notesAndRests)
 
     notes: list[ScoreNote] = []
@@ -202,6 +215,7 @@ def _extract_notes(part) -> tuple[list[ScoreNote], list[ScoreIngestError]]:
                 onset_beats=float(element.offset),
                 duration_beats=float(element.quarterLength),
                 tied_from_prev=tied_from_prev,
+                needs_review=mark_needs_review,
             )
         )
         index += 1
