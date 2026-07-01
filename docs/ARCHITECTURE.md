@@ -112,6 +112,51 @@ plus `supports_mode()` and an `align_incremental()` hook for v2 streaming.
   calls out.
 - `Alignment.is_partial` supports incremental online results not yet finalized.
 
+### Implementation notes (OfflineDtwAligner)
+
+The v1 implementation lives in `offline_dtw_aligner.py`. It rolls its own
+Needleman–Wunsch-style DP table rather than calling `dtw-python`, because we need
+first-class **gap moves** and **segment** control that an off-the-shelf monotonic
+warping path doesn't expose. Each cell has three predecessors: diagonal (match),
+"left" (consume a score note with no performed match → *missed note*), "up"
+(consume a performed note with no score match → *extra note*). Local cost is
+`pitch_cost_weight · pitch + timing_cost_weight · timing`, where pitch is a
+**pitch-class-aware** distance — circular pitch-class distance (0–6 semitones)
+plus a small per-octave penalty, so an octave error costs far less than an
+unrelated wrong note and still *aligns* (octave correction is downstream).
+Timing is the onset deviation converted to beats via `tempo.bpm`. Any candidate
+match whose local cost exceeds `gap_cost_threshold` is forbidden as a match, so
+the DP routes around it as two one-sided `NotePair`s instead of a forced bad
+match. A small match-reward (`gap·0.5`) is subtracted from legitimate matches so
+the optimal path threads through every real correspondence rather than an
+equal-cost degenerate route that drops a genuinely-matching note into a gap.
+`GLOBAL_DTW` anchors both reference boundaries; `SUBSEQUENCE_DTW` frees the
+reference prefix/suffix so the performance can match a contiguous sub-span.
+
+`RESYNC` runs a **global** first pass (so a skip surfaces as a long interior run
+of missed score notes and a repeat as a run of extra performed notes), finds the
+first contiguous run of *bad* steps longer than `resync_window` — a step is bad
+if it is a gap pair **or** a match whose cost exceeds `gap·0.5` — then splits the
+*performance* at that run and re-aligns each slice against the whole score with
+subsequence DTW, letting the "after" slice re-anchor forward (skip) or backward
+(repeat). Skip vs. repeat is decided from the re-anchor points: if the after-slice
+anchors forward leaving an un-covered interior span, that span is `"skipped"`; if
+it anchors at or before the before-slice's last matched note, it is `"repeated"`.
+
+Resolved vs. still approximate (re: "Known risk areas" 4 & 5 below): item 5 (the
+cost-function vs. error-classification split) is cleanly **resolved** — the cost
+function and `gap_cost_threshold` live here and only ever produce an alignment;
+no severity judgement leaks in. Item 4 (skip/repeat breakage) is **largely
+resolved for skips** — they are detected and re-anchored robustly, verified by
+tests. **Repeat detection is heuristic and the weaker half**: backward
+re-anchoring is a strong signal that *a* repeat happened and the surplus notes
+are surfaced structurally (a `"repeated"` span and/or extra one-sided pairs
+rather than forced matches), but proving the replay re-covers a *specific*
+earlier score span exactly would need a dedicated second alignment pass against
+the prior region — future work. Detection thresholds (`resync_window`,
+`gap_cost_threshold`, the `gap·0.5` badness/reward fractions) are also unvalidated
+against real recordings and belong in the eval harness (plan section 5).
+
 ---
 
 ## 4. `assessment.py`
@@ -136,6 +181,21 @@ plus `supports_mode()` and an `align_incremental()` hook for v2 streaming.
   transcription reading itself is untrustworthy, flagging for review instead.
 - Output keys mistakes to `ref_index` for the feedback-ui coloring API and lists
   `correct_ref_indices` so the UI can color the rest green cheaply.
+
+---
+
+## Persistence seam (`score_store.py`) — not one of the plan's 7 modules
+
+`/score/import` and `/performance/analyze` are separate HTTP requests, so
+something has to hold a `Score` between them. `ScoreStore` is a narrow
+contract (`save`/`get`) for that, following the same swap-without-touching-
+callers pattern as everything else here. v1 (`InMemoryScoreStore`) is a
+plain in-process dict — explicitly not durable across restarts and not
+shared across worker processes; fine for this single-process skeleton,
+not for production. `/performance/analyze` falls back to a fixed demo
+score when `score_id == "mock-reference"` so the octave-off demo scenario
+still works without an import first; any other unrecognized `score_id` is
+a 404, not a silent fallback.
 
 ---
 

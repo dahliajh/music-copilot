@@ -1,21 +1,24 @@
 """Music Copilot backend - FastAPI skeleton.
 
-This wires the four module contracts together.
+This wires the four module contracts together, plus a lightweight
+persistence seam (`score_store.py`) so a score imported in one request can
+be looked up by id in another.
 
   * score-ingest (`/score/import`): REAL (MusicXMLIngester, Phase 1).
+    Imported scores are now persisted (`InMemoryScoreStore`) so a later
+    `/performance/analyze` call can look them up by `score_id`.
   * score-align and assessment, inside `/performance/analyze`: REAL
-    (OfflineDtwAligner, RuleBasedAssessor) as of this session - they run
-    for real against whatever Transcription they're handed.
+    (OfflineDtwAligner, RuleBasedAssessor). If `req.score_id` matches a
+    previously-imported score, alignment/assessment run against that REAL
+    score. Unknown ids other than the reserved demo id are a 404.
   * transcription, inside `/performance/analyze`: STILL MOCK. There's no
     real pitch tracker yet (Phase 2 - needs hand-labeled recordings from
     the developer per the MVP plan's evaluation strategy, not started).
-    `_mock_transcription()` stands in for it, and there's no persistence
-    layer yet either, so `/performance/analyze` also ignores
-    `req.score_id` and aligns/assesses against a fixed reference score
-    matching the mock transcription (`_mock_reference_score()`) rather
-    than a real lookup. `AnalyzeResponse.mock=True` reflects this:
-    alignment/assessment are real computations, but the inputs feeding
-    them (transcription + which score) are still placeholders.
+    `_mock_transcription()` stands in for it. Because of that, aligning a
+    real imported score against the mock performance's fixed 4 notes is
+    only meaningful for a small demo score with matching content -
+    `AnalyzeResponse.mock=True` still reflects that the pipeline's audio
+    side is a placeholder even though the score side may now be real.
 
 Run (once deps are installed):
     uvicorn app.main:app --reload
@@ -47,6 +50,7 @@ from app.modules.score_ingest import (
     ScoreSourceFormat,
     TempoReference,
 )
+from app.modules.score_store import InMemoryScoreStore
 from app.modules.transcription import (
     DetectedNote,
     Transcription,
@@ -56,13 +60,20 @@ from app.modules.transcription import (
 _score_ingester = MusicXMLIngester()
 _aligner = OfflineDtwAligner()
 _assessor = RuleBasedAssessor()
+_score_store = InMemoryScoreStore()
+
+# Sentinel id for the fixed demo reference score (see _mock_reference_score),
+# kept requestable by name so the octave-off demo scenario still works
+# without importing a file first. Any other unknown score_id is a real 404.
+_MOCK_REFERENCE_SCORE_ID = "mock-reference"
 
 app = FastAPI(
     title="Music Copilot API",
     version="0.0.1-skeleton",
     description="Offline double-bass mistake detection. SKELETON - "
-    "/score/import is real (Phase 1), /performance/analyze still "
-    "returns mock data pending Phases 2-3.",
+    "/score/import is real (Phase 1); /performance/analyze runs real "
+    "alignment/assessment against a real or demo score, but still uses "
+    "mock transcription pending Phase 2.",
 )
 
 
@@ -106,7 +117,7 @@ def _mock_reference_score() -> Score:
         ScoreNote(index=3, midi=48, pitch_class=48 % 12, onset_beats=3.0, duration_beats=1.0),
     ]
     return Score(
-        score_id="mock-reference",
+        score_id=_MOCK_REFERENCE_SCORE_ID,
         title="Mock reference score (matches _mock_transcription)",
         source_format=ScoreSourceFormat.MUSICXML,
         tempo=TempoReference(bpm=60.0),  # 1 beat == 1s, matches the mock onsets directly
@@ -164,10 +175,11 @@ async def import_score(
 
     Recoverable issues (no tempo marking, chords/multiple voices/parts in
     what's expected to be a monophonic part) don't fail the request — they
-    come back in `warnings` alongside the best-effort `score`. There is no
-    persistence layer yet; the caller is responsible for holding onto the
-    returned `Score` (e.g. to pass its `score_id` into `/performance/analyze`
-    once that's no longer mocked).
+    come back in `warnings` alongside the best-effort `score`. The imported
+    score is persisted (see `score_store.py`) so its `score_id` can be
+    passed into `/performance/analyze` in a later request; this is an
+    in-process store (no durability across restarts, no multi-worker
+    sharing) - fine for this skeleton, not for production.
     """
     if not _score_ingester.supports(source_format):
         raise HTTPException(
@@ -185,25 +197,46 @@ async def import_score(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    _score_store.save(result.score)
     return ScoreImportResponse(score=result.score, warnings=result.warnings)
 
 
 @app.post("/performance/analyze", response_model=AnalyzeResponse)
 def analyze_performance(req: AnalyzeRequest) -> AnalyzeResponse:
-    """PARTIALLY REAL. `req.score_id` is still ignored (no persistence layer
-    yet) and the transcription is still `_mock_transcription()` (no real
-    pitch tracker - Phase 2 hasn't landed). But alignment and assessment now
-    run for real: `OfflineDtwAligner.align()` against a fixed reference
-    score, then `RuleBasedAssessor.assess()` with the requested tolerance
-    profile. Once Phase 2 (real transcription) and score persistence land,
-    only the two `_mock_*` calls below need to change - the
-    align/assess/response wiring is the real, final shape.
+    """PARTIALLY REAL. The transcription is still `_mock_transcription()`
+    (no real pitch tracker - Phase 2 hasn't landed), but `req.score_id` is
+    now looked up for real against whatever was imported via
+    `/score/import`: alignment and assessment run against that REAL score.
+
+    `req.score_id == "mock-reference"` (or omitting a prior import
+    entirely) falls back to the fixed 4-note demo score
+    (`_mock_reference_score()`) matching the mock transcription, so the
+    octave-off demo scenario keeps working without importing a file
+    first. Any other unrecognized `score_id` is a 404 - it means the
+    caller hasn't imported that score in this process, not that the
+    feature is unimplemented.
+
+    Once Phase 2 (real transcription) lands, only `_mock_transcription()`
+    needs to change - the score lookup, align/assess/response wiring is
+    the real, final shape.
     """
     profiles = builtin_profiles()
     profile = profiles.get(req.profile_name, profiles["beginner"])
 
+    if req.score_id == _MOCK_REFERENCE_SCORE_ID:
+        score = _mock_reference_score()
+    else:
+        score = _score_store.get(req.score_id)
+        if score is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No score with score_id={req.score_id!r} has been "
+                "imported in this process. Call /score/import first, or "
+                f"use score_id={_MOCK_REFERENCE_SCORE_ID!r} for the demo "
+                "reference score.",
+            )
+
     transcription = _mock_transcription()
-    score = _mock_reference_score()
 
     alignment = _aligner.align(transcription, score, AlignConfig())
     assessment = _assessor.assess(alignment, score, transcription, profile)
