@@ -434,3 +434,82 @@ def test_subsequence_matches_subspan(aligner: OfflineDtwAligner) -> None:
     assert matched == {0: 2, 1: 3, 2: 4}
     # Performed notes are all matched (no spurious extra-note gaps).
     assert all(p.performed_index is None or p.ref_index is not None for p in align.pairs)
+    # The un-played prefix/suffix must still get *some* verdict (backfilled as
+    # missed gap pairs), not vanish from the alignment entirely - otherwise
+    # RuleBasedAssessor can never flag "you didn't play the start/end of this".
+    ref_indices_seen = {p.ref_index for p in align.pairs if p.ref_index is not None}
+    assert ref_indices_seen == {0, 1, 2, 3, 4, 5, 6}
+    prefix_and_suffix = [p for p in align.pairs if p.ref_index in (0, 1, 5, 6)]
+    assert all(p.performed_index is None for p in prefix_and_suffix)
+
+
+def test_trailing_notes_never_detected_are_still_flagged_missed(
+    aligner: OfflineDtwAligner,
+) -> None:
+    """Regression test for a real bug found against Naveen's full Rabbath-etude
+    recording: the performance covers the whole score, but the LAST couple of
+    score notes never got detected by transcription (e.g. a quiet/decaying
+    final chord). Under plain SUBSEQUENCE_DTW, the DP's free-suffix boundary
+    made those trailing notes vanish from `align.pairs` entirely - not even a
+    missed_note gap pair - because ending the match early costs strictly less
+    than walking them as an explicit (costly) gap. That's correct when the
+    performer genuinely stopped early, but identical-looking when they didn't:
+    either way the ending got silently no verdict instead of a MISSED_NOTE.
+    Every reference note must now show up in `align.pairs`."""
+    score_midis = [60, 62, 64, 65, 67, 69, 71]  # 7 notes
+    score = make_score(score_midis)
+    # Performer plays the first 5 notes correctly; the last 2 (69, 71) are
+    # never detected at all (dropped out, not just mis-pitched).
+    perf = perf_from_score(score_midis[:5])
+
+    align = aligner.align(
+        perf, score, AlignConfig(strategy=AlignStrategy.SUBSEQUENCE_DTW)
+    )
+
+    ref_indices_seen = {p.ref_index for p in align.pairs if p.ref_index is not None}
+    assert ref_indices_seen == set(range(7)), (
+        "trailing score notes 5 and 6 disappeared from the alignment instead "
+        "of being reported as missed"
+    )
+    trailing = {p.ref_index: p for p in align.pairs if p.ref_index in (5, 6)}
+    assert trailing[5].performed_index is None
+    assert trailing[6].performed_index is None
+    # The first 5 notes still matched cleanly - this isn't just "everything is
+    # a gap now".
+    matched = {
+        p.performed_index: p.ref_index
+        for p in align.pairs
+        if p.performed_index is not None and p.ref_index is not None
+    }
+    assert matched == {0: 0, 1: 1, 2: 2, 3: 3, 4: 4}
+
+
+def test_resync_skipped_middle_not_double_reported_by_boundary_backfill(
+    aligner: OfflineDtwAligner,
+) -> None:
+    """The new free-boundary backfill (see the two tests above) only applies
+    to the top-level align() call, NOT to RESYNC's internal per-slice
+    subsequence re-alignment - RESYNC already reports a skipped middle
+    section as one structured SkipRepeatSpan, and backfilling individual
+    missed_note gap pairs for that same span too would double-report it."""
+    score_midis = [60, 62, 64, 65, 67, 69, 71, 72, 74, 76]
+    score = make_score(score_midis)
+    played = [
+        (60, 0 * SEC_PER_BEAT),
+        (62, 1 * SEC_PER_BEAT),
+        (72, 7 * SEC_PER_BEAT),
+        (74, 8 * SEC_PER_BEAT),
+        (76, 9 * SEC_PER_BEAT),
+    ]
+    perf = make_transcription(played)
+    cfg = AlignConfig(strategy=AlignStrategy.RESYNC, resync_window=2)
+
+    align = aligner.align(perf, score, cfg)
+
+    skipped = [s for s in align.skip_repeat_spans if s.kind == "skipped"]
+    assert skipped
+    # The skipped interior notes (roughly 2..6) must NOT also show up as
+    # individual missed_note-eligible gap pairs - RESYNC's own free-boundary
+    # per-slice calls are untouched by the align()-only backfill.
+    interior_pairs = [p for p in align.pairs if p.ref_index in (3, 4, 5)]
+    assert interior_pairs == []

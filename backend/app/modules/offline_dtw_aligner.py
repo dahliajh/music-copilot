@@ -135,6 +135,42 @@ class OfflineDtwAligner(ScoreAligner):
             ref_offset=0,
             free_ref_boundaries=not global_mode,
         )
+        if not global_mode:
+            # SUBSEQUENCE_DTW leaves the un-played prefix/suffix of the
+            # REFERENCE unpenalised during the DP search (see _dp_align's
+            # docstring) - that's correct for keeping the optimal path search
+            # honest, but it also means those boundary ref notes never get a
+            # NotePair at all, so RuleBasedAssessor never sees them and can't
+            # flag them missed. That's fine for a performance that genuinely
+            # starts/ends mid-score (e.g. practicing one line), but it also
+            # silently swallows real endings: a long score whose last couple
+            # of notes just weren't detected by transcription looks identical
+            # to the DP as "performer stopped early", and both get dropped
+            # with zero verdict either way (found via the full Rabbath etude:
+            # the closing chord and the note before it vanished from
+            # assessment entirely, no missed_note, nothing).
+            #
+            # Backfill those never-touched boundary ref notes as gap pairs
+            # (local_cost=0.0, marking them as free-boundary in origin rather
+            # than a real forced gap) so every reference note always gets a
+            # verdict from RuleBasedAssessor - worst case a MISSED_NOTE that's
+            # honestly ambiguous about "skipped" vs "not detected", instead of
+            # invisible. RESYNC does NOT get this treatment: its per-slice
+            # free-boundary calls (_align_resync) rely on exactly this
+            # silence to avoid double-reporting an already-structured
+            # SkipRepeatSpan as a wall of individual missed_note mistakes.
+            touched = {p.ref_index for p in pairs if p.ref_index is not None}
+            missing = [j for j in range(len(ref)) if j not in touched]
+            pairs = pairs + [
+                NotePair(ref_index=j, performed_index=None, local_cost=0.0)
+                for j in missing
+            ]
+            pairs.sort(
+                key=lambda p: (
+                    p.ref_index if p.ref_index is not None else -1,
+                    p.performed_index if p.performed_index is not None else -1,
+                )
+            )
         segment = self._segment_from_pairs(pairs)
         return Alignment(
             mode=AlignMode.OFFLINE,

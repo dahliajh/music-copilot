@@ -1,6 +1,37 @@
 # Music Copilot — Status
 
-_Last updated: 2026-07-01, after formalizing Phase 2 (real transcription) into committed code._
+_Last updated: 2026-07-02, after validating the complete 9-line Rabbath étude reference score and fixing a real subsequence-DTW boundary bug it exposed._
+
+## Full 9-line Rabbath étude validation + a real alignment bug found and fixed
+
+Built the complete reference score for Rabbath's Étude No. 1 (all 9 lines, ~272
+notes, dictated note-by-note by Naveen across many rounds — kept local/private
+only, never committed here, it's an in-print Leduc publication). Ingests
+cleanly: `needs_review=True` throughout, closing whole-note chord (E2+A2)
+degrades to E2 with the expected `chord_in_monophonic_part` warning, nothing
+broke.
+
+Ran the real `PyinTranscriber` against the full ~102s recording and pushed it
+through `OfflineDtwAligner` + `RuleBasedAssessor` end to end (266 notes
+detected vs. 272 in the score, 183 matched pairs). This surfaced a genuine bug:
+the closing chord and the note before it got **no verdict at all** — not even
+a `missed_note` — because `SUBSEQUENCE_DTW`'s free reference-boundary handling
+(needed so a performance can legitimately start/end mid-score without penalty)
+made the DP prefer silently ending the match early over paying the cost of
+flagging trailing notes as missed. Indistinguishable, from the DP's
+perspective, from "the performer stopped early" — an honest ambiguity, not a
+simple bug — but the *symptom* (a score note nobody ever sees a verdict for)
+was real and worth fixing.
+
+Fixed in `OfflineDtwAligner.align()`: any reference note the chosen DP path
+never touches now gets backfilled as a zero-cost missed-eligible gap pair, so
+`RuleBasedAssessor` always produces a verdict for every score note.
+Deliberately NOT applied inside RESYNC's internal per-slice calls, which rely
+on that same free-boundary silence to avoid double-reporting an already-
+structured `SkipRepeatSpan` as a wall of individual `missed_note` mistakes —
+covered by a new regression test asserting RESYNC's skipped-middle behavior is
+unchanged. Full writeup in `docs/ARCHITECTURE.md`'s "Known risk areas" #4.
+2 new tests, 75/75 backend tests passing.
 
 ## Phase 2 (transcription) is now real code, not just a scratch script
 

@@ -262,7 +262,29 @@ make room for them but **do not solve them** — implementation work must:
    `confidence`, not amplitude.
 4. **DTW skip/repeat breakage (alignment).** Implement `SUBSEQUENCE_DTW` /
    `RESYNC` for real, not just `GLOBAL_DTW`. Include skipped/repeated takes in
-   the regression set.
+   the regression set. **Found and fixed a real bug here** via the full
+   9-line Rabbath étude validation: `SUBSEQUENCE_DTW`'s free reference
+   prefix/suffix (correctly unpenalised during the DP's optimal-path search,
+   see `_dp_align`'s docstring) meant boundary score notes with no cheap
+   match left the DP with literally no pair at all — not even a
+   `missed_note` gap — because ending the match early always costs less than
+   walking them as an explicit gap. The etude's closing whole-note chord and
+   the note before it vanished from assessment entirely with zero verdict.
+   This is indistinguishable, from the DP's perspective alone, from the
+   performer genuinely having stopped early — which is exactly the case
+   `SUBSEQUENCE_DTW`'s free boundary exists to support — so it's an honest
+   ambiguity, not a simple "score note vs. silence" bug. Fixed in `align()`
+   (not `_dp_align` itself, and specifically NOT applied inside
+   `_align_resync`'s internal per-slice calls) by backfilling any reference
+   index untouched by the DP's chosen path as a zero-cost `missed_note`-
+   eligible gap pair, so every score note always gets *some* verdict.
+   RESYNC is deliberately excluded from this backfill: its skipped-middle
+   sections are already reported as one structured `SkipRepeatSpan`, and
+   applying the same backfill there would double-report the same skip as
+   both a span AND a wall of individual `missed_note` mistakes. See
+   `test_trailing_notes_never_detected_are_still_flagged_missed` and
+   `test_resync_skipped_middle_not_double_reported_by_boundary_backfill` in
+   `test_offline_dtw_aligner.py`.
 5. **Cost-function vs. error-classification split (alignment ↔ assessment).**
    DTW gives alignment, not error classification; the `gap_cost_threshold` lives
    in alignment, but wrong-note severity is assessment's. Keep the boundary
