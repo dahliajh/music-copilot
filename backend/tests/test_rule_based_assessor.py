@@ -260,6 +260,39 @@ def test_low_confidence_does_not_suppress_timing_mistakes(assessor: RuleBasedAss
     assert result.mistakes[0].type == MistakeType.TIMING_LATE
 
 
+def test_builtin_profiles_do_not_suppress_wrong_pitch_at_realistic_confidence(
+    assessor: RuleBasedAssessor,
+) -> None:
+    """Regression test for a real finding, not the `PROFILE` fixture's
+    explicit 0.5 threshold above: `builtin_profiles()` ("beginner" and
+    "advanced") default `min_confidence_for_pitch_error` to 0.0, disabling
+    the suppression entirely. This was a deliberate fix, not an oversight -
+    see assessment.py's `builtin_profiles()` docstring and ARCHITECTURE.md
+    risk area #3. Validated against a real double-bass recording, pYIN's
+    confidence signal (`DetectedNote.confidence`) does not predict pitch
+    correctness at all (Pearson correlation ~0 across the full observed
+    range) - so gating on it just silently discarded real wrong-pitch
+    signal on ~99% of notes (typical real confidence values on that
+    recording were 0.03-0.3, all comfortably below the field's own 0.5
+    placeholder default) without actually protecting against anything.
+    0.15 below models a typical real (not synthetic-perfect) confidence
+    reading - well below the OLD 0.5 default, comfortably above the noise
+    floor `PyinPitchTracker.MIN_CONFIDENCE` (0.03) already filters out
+    before notes ever reach assessment.
+    """
+    for profile_name in ("beginner", "advanced"):
+        profile = builtin_profiles()[profile_name]
+        score = _score([_note(0, 43, 0.0)])
+        # Wrong pitch (45 vs reference 43) at a realistic-low confidence.
+        performance = _performance([_detected(0, 45, 0.0, confidence=0.15)])
+        alignment = _alignment([NotePair(ref_index=0, performed_index=0)])
+
+        result = assessor.assess(alignment, score, performance, profile)
+
+        assert len(result.mistakes) == 1, profile_name
+        assert result.mistakes[0].type == MistakeType.WRONG_PITCH, profile_name
+
+
 def test_gradual_tempo_drift_does_not_generate_false_late_verdicts(assessor: RuleBasedAssessor) -> None:
     """The real-world bug this feature fixes: a performer who plays freely
     (not to a click track) and gradually slows down should NOT accumulate

@@ -1,6 +1,37 @@
 # Music Copilot — Status
 
-_Last updated: 2026-07-02, after fixing a real octave-error root cause found via the full-etude recording (a second investigation into confidence-gating is still in progress)._
+_Last updated: 2026-07-02, after disabling a confidence-gating mechanism that real-recording data showed doesn't work._
+
+## Confidence-gating disabled by default (assessment) — validated broken, not just untuned
+
+`ToleranceProfile.min_confidence_for_pitch_error` (default 0.5) was meant to
+suppress a `WRONG_PITCH`/`OCTAVE_OFF` verdict when the transcription's
+confidence in that reading was too low to trust, downgrading it to
+`LOW_CONFIDENCE` instead. Tested this directly against the real 272-note
+Rabbath recording: pYIN's per-note confidence does not predict pitch
+correctness at all (Pearson correlation -0.004 across 166 real matched
+pairs, flat 18-36% exact-match rate in every confidence bucket). Also
+checked cents-offset magnitude as an alternative signal — also uncorrelated
+(-0.013). The aligner's own `NotePair.local_cost` DOES correlate strongly
+(+0.87) but can't be reused as an independent trust gate — it's circular,
+already built from pitch distance itself.
+
+At the old 0.5 default this gate suppressed the real pitch verdict on ~99%
+of detected notes on that recording, regardless of correctness — concretely,
+114 matched pairs got downgraded to `LOW_CONFIDENCE` (only 1 real
+`WRONG_PITCH` got through) where disabling the gate correctly resolves them
+to 99 `WRONG_PITCH` + 16 `OCTAVE_OFF`, spot-checked by hand and sane.
+
+Fix: `builtin_profiles()` now defaults `min_confidence_for_pitch_error` to
+0.0 for both "beginner" and "advanced" (mechanism kept, not removed, in case
+a better signal shows up later — still tested via an explicit fixture
+profile). 1 new regression test, 79/79 backend tests passing. Full writeup
+in `docs/ARCHITECTURE.md` risk area #3.
+
+(A delegated agent started this investigation and got stuck partway through
+after a confirmation interruption I couldn't clear — its early findings were
+reproduced and reused, but the fix and verification above were done
+directly, not by that agent.)
 
 ## Octave-error root cause found and partially fixed (transcription)
 

@@ -305,9 +305,56 @@ make room for them but **do not solve them** — implementation work must:
 2. **Frame-size / timing-precision tradeoff (transcription).** `frame_size_ms`
    must be tuned, not defaulted-and-forgotten; this is the most likely place
    Phase 2's estimate slips.
-3. **Low-SNR quiet low notes (transcription).** Lowest confidence is exactly
-   where the signal is weakest; budget tuning time. Drive trust off
-   `confidence`, not amplitude.
+3. **Low-SNR quiet low notes (transcription) - confidence-gating tried and
+   found not to work; disabled rather than left broken.** Lowest confidence
+   is exactly where the signal is weakest. The original plan here was
+   "drive trust off `confidence`, not amplitude" - `ToleranceProfile.
+   min_confidence_for_pitch_error` (default 0.5) was meant to suppress a
+   `WRONG_PITCH`/`OCTAVE_OFF` verdict and downgrade it to `LOW_CONFIDENCE`
+   when the transcription's own confidence in the reading was too low to
+   trust. Validated against the same real 272-note Rabbath recording as
+   risk area #1: it doesn't work. Bucketing 166 real DTW-matched note pairs
+   by `DetectedNote.confidence` (pYIN's voiced-probability average - see
+   `pyin_transcriber.py`'s `_pitch_stats`) and checking exact-pitch-match
+   rate per bucket is flat (18-36%, no trend) across the full observed
+   range (0.03-0.58); Pearson correlation between confidence and
+   pitch-class distance from the reference is **-0.004** - indistinguishable
+   from zero. Also checked `|cents_offset|` (how far the raw estimate sits
+   from the nearest semitone) as an alternative signal: also uncorrelated
+   (-0.013). The one signal that DOES strongly predict correctness -
+   `NotePair.local_cost` from the aligner, correlation **+0.87**, cleanly
+   monotonic across cost buckets - can't be reused as an independent trust
+   gate: it's circular, since `local_cost` is itself already built from
+   pitch-class distance plus an octave penalty plus cents distance (see
+   `offline_dtw_aligner.py`'s `_pitch_cost`), i.e. it already IS the answer
+   to "is this pitch reading close to the reference", not a second opinion
+   on it.
+   Consequence: at the field's placeholder 0.5 default, this gate
+   suppressed the real pitch verdict on **~99% of all detected notes** on
+   that recording (typical real confidence values there were 0.03-0.3, all
+   well under 0.5) regardless of whether the reading was actually right or
+   wrong - not a conservative safety margin, just discarding real signal
+   wholesale. Concretely, on the same transcription/alignment: at the old
+   0.5 default, 114 matched pairs got downgraded to `LOW_CONFIDENCE`
+   (1 `WRONG_PITCH` total made it through); with the gate disabled, those
+   same 114 pairs correctly resolve to 99 `WRONG_PITCH` + 16 `OCTAVE_OFF` -
+   spot-checked several by hand (comparing detected vs. reference MIDI
+   directly) and they're real, sane pitch discrepancies, not noise.
+   **Fix:** `builtin_profiles()` ("beginner" and "advanced") now default
+   `min_confidence_for_pitch_error` to **0.0** (never suppresses), not the
+   field's own 0.5 placeholder - see that function's docstring in
+   `assessment.py` for the full writeup. The mechanism itself is NOT
+   removed (the field, and `RuleBasedAssessor`'s suppression logic, both
+   still exist and are still tested via a fixed `PROFILE` in
+   `test_rule_based_assessor.py` that sets it to 0.5 explicitly) in case a
+   better-behaved confidence signal shows up later; it's disabled by
+   default because the one signal it currently has access to has been
+   directly shown not to work, on real data, twice (before and after the
+   separate octave-error fix in risk area #1 - re-verified against a fresh
+   transcription run to make sure the octave fix didn't change the
+   conclusion, which it didn't). See
+   `test_builtin_profiles_do_not_suppress_wrong_pitch_at_realistic_
+   confidence` for the regression test locking this in.
 4. **DTW skip/repeat breakage (alignment).** Implement `SUBSEQUENCE_DTW` /
    `RESYNC` for real, not just `GLOBAL_DTW`. Include skipped/repeated takes in
    the regression set. **Found and fixed a real bug here** via the full

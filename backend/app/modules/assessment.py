@@ -54,12 +54,47 @@ class ToleranceProfile(BaseModel):
 
     # Below this transcription confidence, suppress a wrong-pitch verdict (the
     # reading itself is untrustworthy) and flag for review instead.
+    #
+    # DEFAULT IS 0.0 (effectively disabled) IN builtin_profiles() BELOW - see
+    # that function's docstring. The field/mechanism itself is kept (not
+    # removed) because it's a reasonable idea in principle and a future,
+    # better-behaved confidence signal might make it useful; a fixed
+    # PROFILE in test_rule_based_assessor.py sets it to 0.5 explicitly and
+    # tests the suppression logic still works correctly when a caller does
+    # want it.
     min_confidence_for_pitch_error: float = Field(0.5, ge=0.0, le=1.0)
 
 
 def builtin_profiles() -> dict[str, ToleranceProfile]:
     """Starter profiles. Exact values are placeholders to be tuned against real
     recordings (see plan section 6, open questions).
+
+    `min_confidence_for_pitch_error` is 0.0 (never suppresses) in both
+    profiles below - NOT the field's own placeholder default of 0.5. This
+    was deliberately disabled, not merely left untuned: validated against a
+    real ~102s double-bass recording (272-note reference score, real
+    `PyinTranscriber` output, real `OfflineDtwAligner` matches), pYIN's
+    per-note confidence (`DetectedNote.confidence`, a voiced-probability
+    average - see `pyin_transcriber.py`'s `_pitch_stats`) does NOT predict
+    pitch correctness on this instrument/recording: bucketing 166 real
+    matched note pairs by confidence and checking exact-pitch-match rate
+    per bucket is flat (18-36%, no trend) across the entire observed
+    confidence range (0.03-0.58), and the Pearson correlation between
+    confidence and pitch-class distance from the reference is -0.004 -
+    indistinguishable from zero. A fixed threshold of 0.5 (the field's
+    placeholder default) meant this gate suppressed the real pitch verdict
+    on ~99% of all detected notes on that recording, regardless of whether
+    the reading was actually right or wrong - not a conservative safety
+    margin, just discarding real signal. Cents-offset magnitude
+    (`|DetectedNote.cents_offset|`, i.e. how far the raw estimate sits from
+    the nearest semitone) was also checked as an alternative gating signal
+    and is similarly uncorrelated (-0.013). See `docs/ARCHITECTURE.md`
+    risk area #3 for the full writeup, including what WAS found to
+    strongly predict correctness (the aligner's own `NotePair.local_cost`)
+    and why that can't be reused here as an independent trust signal (it's
+    circular - `local_cost` already IS a pitch-distance measure, so gating
+    on it would mean "only trust the verdict when the verdict already
+    looks right", not a real confidence check).
     """
 
     return {
@@ -68,12 +103,14 @@ def builtin_profiles() -> dict[str, ToleranceProfile]:
             pitch_tolerance_cents=60.0,
             timing_tolerance_ms=150.0,
             octave_policy=OctavePolicy.CORRECT_WITH_WARNING,
+            min_confidence_for_pitch_error=0.0,
         ),
         "advanced": ToleranceProfile(
             name="advanced",
             pitch_tolerance_cents=25.0,
             timing_tolerance_ms=30.0,
             octave_policy=OctavePolicy.CORRECT_WITH_WARNING,
+            min_confidence_for_pitch_error=0.0,
         ),
     }
 
