@@ -251,9 +251,57 @@ a 404, not a silent fallback.
 These are explicitly carried from the plan's post-review notes; the contracts
 make room for them but **do not solve them** — implementation work must:
 
-1. **Octave-detection errors (transcription).** The dominant bass failure mode.
-   Use the range prior (`min_midi`/`max_midi`) plus a real `OctaveCorrector`
-   before notes reach alignment. Validate against hand-labeled recordings.
+1. **Octave-detection errors (transcription) - partially root-caused and
+   partially fixed.** The dominant bass failure mode. Validated against the
+   full 272-note Rabbath Etude No. 1 recording (real audio, real score,
+   real pipeline, not mocks): of 159 DTW-matched note pairs, 33 (20.8%) sat
+   in a distinct cluster near-but-not-at a full octave off from the
+   reference (`detected_midi - reference_midi` in {-13,-11,-10,-9,9,10,11,
+   13,15}, not the clean {-12,+12} `RangeClampOctaveCorrector` is designed
+   to produce) - i.e. correction wasn't merely imprecise, it was
+   structurally not firing on these notes at all. Root-caused by tracing
+   specific examples back through raw (pre-correction) pYIN f0 frames:
+   - **Found and fixed (~73%, 24/33 cases):** `_split_oversized_segments`
+     (the slur-handling sub-splitter - see this file's pyin_transcriber.py
+     notes above) had no minimum-run-length floor. A slurred pitch
+     transition (finger sliding between positions, or a bow-noise transient
+     at the join) routinely produced 1-5 consecutive frames (10-50ms) whose
+     `medfilt(kernel=3)`-smoothed pitch briefly read as an unrelated note.
+     With no floor, that handful of frames became a fully-fledged reported
+     note in its own right. Critically, because the resulting bad estimate
+     usually landed *inside* `[min_midi, max_midi]` on its own (not
+     genuinely out of range, just the wrong in-range note),
+     `RangeClampOctaveCorrector` had structurally nothing to do - it only
+     ever acts on out-of-range notes, and an in-range wrong-octave estimate
+     is invisible to a pure range clamp. Fixed by adding
+     `MIN_SPLIT_RUN_FRAMES` (4 frames, ~40ms at the default 10ms hop):
+     pitch-change runs shorter than this now merge into the longer
+     neighboring run and get their pitch recomputed from the combined
+     frames, instead of being reported standalone. On the same recording
+     this took the near-octave-cluster from 33/159 (20.8%) matched pairs
+     down to 23/146 (15.8%), and the overall exact-pitch-match rate from
+     32.7% to 34.9%. See `test_split_oversized_segments_merges_short_
+     transition_fragment` and its neighbors in `test_pyin_transcriber.py`
+     (synthetic frame arrays, not the real recording, per that file's
+     existing no-real-audio-fixture convention).
+   - **Traced but NOT fixed (~27%, remaining cases after the above fix):**
+     the residual near-octave errors are cases where pYIN's raw f0 estimate
+     is stable and consistent for a full second or more (dozens of frames,
+     not a short transient) yet is still confidently locked onto the wrong
+     octave-neighborhood pitch - confirmed independent of `min_midi`/
+     `max_midi` by re-running pYIN on the same audio slice with a much
+     wider, unconstrained fmin/fmax and getting the same wrong answer. This
+     is a genuine pYIN pitch-estimation limit on this recording (plausibly
+     a strong sub-harmonic/body-resonance outcompeting a weak true
+     fundamental at low SNR - this instrument's confidence readings are
+     uniformly low across the whole recording, see risk area #3), not a
+     segmentation or range-clamp bug, and `RangeClampOctaveCorrector`
+     cannot help for the same structural reason as above: the wrong
+     estimate is already in-range. Fixing this for real needs a smarter
+     `OctaveCorrector` policy (median-across-neighbors and/or an
+     overtone/harmonic-strength check) - this was already flagged above as
+     deliberately-not-yet-attempted v1 future work, and this validation
+     confirms it's needed, not just theoretically nice-to-have.
 2. **Frame-size / timing-precision tradeoff (transcription).** `frame_size_ms`
    must be tuned, not defaulted-and-forgotten; this is the most likely place
    Phase 2's estimate slips.

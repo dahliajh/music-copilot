@@ -1,6 +1,36 @@
 # Music Copilot — Status
 
-_Last updated: 2026-07-02, after validating the complete 9-line Rabbath étude reference score and fixing a real subsequence-DTW boundary bug it exposed._
+_Last updated: 2026-07-02, after fixing a real octave-error root cause found via the full-etude recording (a second investigation into confidence-gating is still in progress)._
+
+## Octave-error root cause found and partially fixed (transcription)
+
+Dispatched a focused investigation into the "near-octave but not clean ±12"
+error cluster from the full-etude validation run below (33/159 matched pairs,
+20.8%). Traced specific examples back through raw pre-correction pYIN frames
+and found two distinct causes:
+
+1. **Fixed:** `_split_oversized_segments` (the slur sub-splitter in
+   `pyin_transcriber.py`) had no minimum-run-length floor, so a brief (10-50ms)
+   pitch blip at a slurred transition got reported as its own standalone note
+   — and because that bad estimate usually already landed inside
+   `[min_midi, max_midi]`, `RangeClampOctaveCorrector` never saw it as
+   correctable (it only acts on out-of-range notes). Added
+   `MIN_SPLIT_RUN_FRAMES` (4 frames) so short runs merge into their neighbor
+   instead. Real-recording result: near-octave cluster 20.8% → 15.8% of
+   matched pairs, exact-pitch-match rate 32.7% → 34.9%. 3 new synthetic-data
+   tests, 78/78 backend tests passing.
+2. **Traced, not fixed:** the remaining cluster is pYIN itself confidently
+   locking onto the wrong octave-neighborhood pitch for a full second or
+   more (confirmed independent of the `min_midi`/`max_midi` range) — a real
+   signal-quality limit on this recording, not a segmentation bug. Needs a
+   smarter `OctaveCorrector` (median-across-neighbors / harmonic-strength
+   check) — already-known future work, now confirmed necessary rather than
+   just theoretically nice-to-have. Full writeup in `docs/ARCHITECTURE.md`
+   risk area #1.
+
+A second, separate investigation (whether pYIN's confidence signal actually
+predicts pitch correctness — spoiler from an initial check: on this
+recording it doesn't, near-zero correlation) is still in progress.
 
 ## Full 9-line Rabbath étude validation + a real alignment bug found and fixed
 

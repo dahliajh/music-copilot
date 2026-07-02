@@ -68,6 +68,25 @@ MIN_CONFIDENCE = 0.03
 # not validated across pieces/tempos beyond the one real recording so far.
 OVERSIZED_FACTOR = 2.2
 
+# A pitch-change sub-segment inside `_split_oversized_segments` shorter than
+# this many analysis frames is treated as a transition artifact, not a real
+# note, and gets merged into a neighboring run instead of being reported as
+# its own note. Root-caused against a real recording (Rabbath Etude No. 1):
+# the medfilt(kernel=3) denoise in `_split_oversized_segments` still passes
+# through short (1-5 frame / 10-50ms) runs exactly at a slurred pitch
+# transition (a finger sliding/rolling between positions, or a bow-noise
+# transient at the join) - those runs get `_pitch_stats`'d and reported as
+# real notes with almost no averaging to reject the transition noise,
+# frequently landing a semitone or two into the NEIGHBORING octave region
+# (which is why `RangeClampOctaveCorrector` can't catch it - the bad
+# estimate is already in-range, just wrong). Accounted for ~73% (24/33) of
+# the near-octave-but-not-exactly-12-semitone error cluster found in the
+# full-etude validation run; see ARCHITECTURE.md risk area #1. 4 frames
+# (~40ms at the default 10ms hop) is short even for a fast passing tone at
+# a brisk tempo, so this should not eat real short notes - see
+# `test_split_oversized_segments_merges_short_transition_fragment`.
+MIN_SPLIT_RUN_FRAMES = 4
+
 
 def _frame_length_for(frame_size_ms: float, sample_rate: int, fmin_hz: float) -> int:
     """pYIN needs roughly 2 periods of fmin to fit in one analysis frame or
@@ -226,16 +245,50 @@ def _split_oversized_segments(
 
         j = 0
         n = len(rounded)
+        runs: list[list[int]] = []  # [start_idx, end_idx) into seg_t/seg_f0/seg_conf
         while j < n:
             k = j
             while k < n and rounded[k] == rounded[j]:
                 k += 1
-            sub_t0 = float(seg_t[j])
-            sub_t1 = float(seg_t[k]) if k < n else seg.offset_s
-            if sub_t1 > sub_t0:
-                _, cents, conf = _pitch_stats(seg_f0[j:k], seg_conf[j:k])
-                result.append(_Segment(sub_t0, sub_t1, int(rounded[j]), cents, conf))
+            runs.append([j, k])
             j = k
+
+        # Merge any run shorter than MIN_SPLIT_RUN_FRAMES into its longer
+        # neighbor. Short runs here are almost always a slurred pitch-
+        # transition artifact rather than a real note - see
+        # MIN_SPLIT_RUN_FRAMES's docstring. Re-check from the start after
+        # each merge since merging can make a previously-fine neighbor the
+        # new shortest run's target, or combine two short runs together.
+        changed = True
+        while changed and len(runs) > 1:
+            changed = False
+            for idx, (a, b) in enumerate(runs):
+                if (b - a) >= MIN_SPLIT_RUN_FRAMES:
+                    continue
+                left = runs[idx - 1] if idx > 0 else None
+                right = runs[idx + 1] if idx < len(runs) - 1 else None
+                if left is not None and right is not None:
+                    target = left if (left[1] - left[0]) >= (right[1] - right[0]) else right
+                elif left is not None:
+                    target = left
+                elif right is not None:
+                    target = right
+                else:
+                    break  # only run left, nothing to merge into
+                if target is left:
+                    left[1] = b
+                else:
+                    right[0] = a
+                runs.pop(idx)
+                changed = True
+                break
+
+        for a, b in runs:
+            sub_t0 = float(seg_t[a])
+            sub_t1 = float(seg_t[b]) if b < n else seg.offset_s
+            if sub_t1 > sub_t0:
+                midi, cents, conf = _pitch_stats(seg_f0[a:b], seg_conf[a:b])
+                result.append(_Segment(sub_t0, sub_t1, midi, cents, conf))
 
     return result
 

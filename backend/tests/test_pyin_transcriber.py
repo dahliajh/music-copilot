@@ -19,10 +19,13 @@ import pytest
 
 from app.modules.pyin_transcriber import (
     MIN_CONFIDENCE,
+    MIN_SPLIT_RUN_FRAMES,
     PyinPitchTracker,
     PyinTranscriber,
     RangeClampOctaveCorrector,
     _frame_length_for,
+    _split_oversized_segments,
+    _Segment,
 )
 from app.modules.transcription import DetectedNote, PitchTracker, Transcription, TranscriptionConfig
 
@@ -188,3 +191,104 @@ def test_transcriber_facade_default_config() -> None:
     transcriber = PyinTranscriber(pitch_tracker=_FakePitchTracker())
     result = transcriber.run(b"unused", sample_rate=44100)
     assert len(result.notes) == 1
+
+
+# --------------------------------------------------------------------------- #
+# _split_oversized_segments - direct unit tests against synthetic frame
+# arrays (not audio; this bypasses librosa/pyin entirely so the test is fast,
+# deterministic, and exercises exactly the merge logic in isolation).
+#
+# Root cause this guards against: a real ~102s double-bass recording (see
+# ARCHITECTURE.md risk area #1) showed a cluster of "final" (post-octave-
+# -correction) detected notes off by 9-11 or 13-15 semitones from the
+# reference - near a full octave (12) but not clean. Root-caused to
+# `_split_oversized_segments`'s pitch-change sub-splitting: a slurred
+# transition (finger sliding between positions, or a bow-noise transient at
+# the join) produces a handful of consecutive frames whose smoothed pitch
+# briefly reads as some other, unrelated note. With no minimum-run-length
+# floor, that handful of frames became its OWN reported note - and because
+# its (wrong) pitch estimate already fell inside `[min_midi, max_midi]`,
+# `RangeClampOctaveCorrector` had nothing to correct (it only acts on
+# out-of-range notes). ~73% (24/33) of the near-octave-error cluster in the
+# full-etude validation traced to exactly this mechanism.
+# --------------------------------------------------------------------------- #
+
+def _synthetic_frames(midi_sequence: list[tuple[int, int]], hop_s: float = 0.01):
+    """Build (times, f0, voiced_flag, voiced_prob) arrays from a list of
+    (midi, frame_count) pairs at a constant hop, all voiced at fixed
+    confidence. Lets tests target `_split_oversized_segments` directly
+    without going through pyin/librosa at all.
+    """
+    freqs: list[float] = []
+    for midi, count in midi_sequence:
+        freqs.extend([_midi_to_hz(midi)] * count)
+    n = len(freqs)
+    times = np.arange(n) * hop_s
+    f0 = np.array(freqs, dtype=np.float64)
+    voiced_flag = np.ones(n, dtype=bool)
+    voiced_prob = np.full(n, 0.8)
+    return times, f0, voiced_flag, voiced_prob
+
+
+def test_split_oversized_segments_merges_short_transition_fragment() -> None:
+    # A slurred segment: a stable note (midi 40) for 20 frames, a brief
+    # 2-frame transition blip landing on an unrelated pitch (midi 52 -
+    # standing in for a real slide/bow-noise artifact), then a second
+    # stable note (midi 44) for 20 frames. 2 frames is below
+    # MIN_SPLIT_RUN_FRAMES, so the blip must be absorbed into a neighboring
+    # run rather than reported as a third, spurious note.
+    assert 2 < MIN_SPLIT_RUN_FRAMES
+    hop_s = 0.01
+    times, f0, voiced_flag, voiced_prob = _synthetic_frames(
+        [(40, 20), (52, 2), (44, 20)], hop_s=hop_s
+    )
+    long_seg = _Segment(0.0, len(f0) * hop_s, 40, 0.0, 0.8)
+    # Several short "normal" segments before it so the piece's median
+    # segment duration is small enough that `long_seg` (0.42s) clearly
+    # exceeds OVERSIZED_FACTOR (2.2x) of it and gets sub-split at all.
+    normal_segs = [_Segment(-0.1 * (i + 1), -0.1 * i, 41, 0.0, 0.8) for i in range(1, 6)]
+
+    result = _split_oversized_segments(normal_segs + [long_seg], times, f0, voiced_flag, voiced_prob)
+
+    midis = [s.midi for s in result if s.onset_s >= 0.0]
+    assert 52 not in midis, "short transition blip must not be reported as its own note"
+    assert 40 in midis and 44 in midis, "both real notes on either side must survive"
+
+
+def test_split_oversized_segments_keeps_run_at_exactly_the_minimum() -> None:
+    # A run exactly MIN_SPLIT_RUN_FRAMES long is a real (if brief) note, not
+    # a transition artifact, and must be kept as its own segment.
+    hop_s = 0.01
+    times, f0, voiced_flag, voiced_prob = _synthetic_frames(
+        [(40, 20), (46, MIN_SPLIT_RUN_FRAMES), (44, 20)], hop_s=hop_s
+    )
+    long_seg = _Segment(0.0, len(f0) * hop_s, 40, 0.0, 0.8)
+    normal_segs = [_Segment(-0.1 * (i + 1), -0.1 * i, 41, 0.0, 0.8) for i in range(1, 6)]
+
+    result = _split_oversized_segments(normal_segs + [long_seg], times, f0, voiced_flag, voiced_prob)
+
+    midis = [s.midi for s in result if s.onset_s >= 0.0]
+    assert 40 in midis and 46 in midis and 44 in midis
+
+
+def test_split_oversized_segments_recomputes_pitch_after_merge() -> None:
+    # After a short fragment is merged into a neighbor, the merged
+    # segment's reported pitch must be recomputed from the COMBINED frames
+    # (via `_pitch_stats`), not left as the stale single-frame estimate
+    # from before the merge - otherwise the merge silently keeps reporting
+    # a bad boundary-frame pitch instead of the more stable neighbor pitch.
+    hop_s = 0.01
+    # note at midi 40 for 20 frames, then 1 stray frame that rounds to 41
+    # (adjacent semitone) which should merge into the midi-40 run and not
+    # change its reported pitch.
+    times, f0, voiced_flag, voiced_prob = _synthetic_frames(
+        [(40, 20), (41, 1)], hop_s=hop_s
+    )
+    long_seg = _Segment(0.0, len(f0) * hop_s, 40, 0.0, 0.8)
+    normal_segs = [_Segment(-0.1 * (i + 1), -0.1 * i, 41, 0.0, 0.8) for i in range(1, 6)]
+
+    result = _split_oversized_segments(normal_segs + [long_seg], times, f0, voiced_flag, voiced_prob)
+
+    real_segments = [s for s in result if s.onset_s >= 0.0]
+    assert len(real_segments) == 1
+    assert real_segments[0].midi == 40
